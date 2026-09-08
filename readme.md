@@ -8,6 +8,22 @@
 
 - バックエンドに、Python,FlaskとOpenAI APIを用いてローカル起動のOllamaを叩いています。
 
+# フォルダ構成
+
+```text
+frontend/
+  index.html          # Vue.jsによる画面・入力・通信
+backend/
+  app.py              # Flask API、モデル設定、画面の配信
+  prompt.txt          # 日本語の質問・結果を生成する指示
+  requirements.txt    # Pythonの依存ライブラリ
+  test_app.py         # APIと画面配信の自動テスト
+```
+
+相談用AIは `gemma3:4b` を使用します。モデルの詳細は [Ollama公式ページ](https://ollama.com/library/gemma3) を参照してください。
+変更する場合は `backend/app.py` の既定値、または環境変数 `OLLAMA_MODEL` で指定します。
+初回はモデルの読み込みに時間がかかることがあります。
+
 # 環境
 - Vscode
 - OpenCode
@@ -26,7 +42,7 @@ winget install --id SST.opencode -e --source winget --accept-package-agreements 
 winget install --id Ollama.Ollama -e --source winget --accept-package-agreements --accept-source-agreements
 start /b ollama serve > NUL 2>&1
 timeout /t 3 /nobreak > NUL
-ollama pull qwen3.5:0.8b
+ollama pull gemma3:4b
 ```
 
 - vscodeを起動し、アクティビティバーの拡張機能から、以下のプラグインをインストールしてください。
@@ -40,15 +56,15 @@ ollama pull qwen3.5:0.8b
   以下のコマンドでPythonの利用ライブラリをインストールします。
 
   ```
-  pip install -r requirements.txt
+  pip install -r backend/requirements.txt
   ```
 
 # 実行方法
 
-- 以下のコマンドでサーバを起動します。
+- プロジェクトのルートで以下のコマンドを実行します。Ollamaも起動しておいてください。
 
   ```
-  python app.py
+  python backend/app.py
   ```
 
 - ブラウザで以下のURLにアクセスしてみてください。
@@ -56,6 +72,10 @@ ollama pull qwen3.5:0.8b
   ```
   http://localhost:5000
   ```
+
+- フロントエンドはFlaskが配信するため、別のサーバーは不要です。
+- 自動テスト：`python -m unittest discover -s backend -p "test_*.py"`
+- `/send_api` には `{"consultation":"相談内容","history":[]}` をPOSTします。履歴は `{"question":"質問","answer":"回答"}` の配列です。応答は仕様書の `question` または `result` のJSON形式です。
 
 # 開発の参考資料
 
@@ -92,7 +112,7 @@ ollama launch opencode --model=qwen3.5:0.8b
 
 - フロントエンド担当者は、html/JavaScriptを追加／修正して画面を構築してください。
 
-- バックエンド担当者は、app.py上にURLとAPIを作成してください。
+- バックエンド担当者は、backend/app.py上にURLとAPIを作成してください。
 
 # 参考リンク
 

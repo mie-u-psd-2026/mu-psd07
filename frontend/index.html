@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#087ca8">
+    <title>AI意思決定サポーター</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <style>
+        :root { color-scheme: light; --ink: #203e50; --muted: #536f80; --accent: #087ca8; --line: #cce5f1; }
+        * { box-sizing: border-box; }
+        body { margin: 0; background: #f0f9ff; color: var(--ink); font-family: "Yu Gothic", "Hiragino Kaku Gothic ProN", sans-serif; line-height: 1.8; }
+        [v-cloak] { display: none; }
+        button, input, textarea { font: inherit; }
+        button { cursor: pointer; min-height: 48px; border-radius: 12px; padding: 12px 22px; }
+        button:disabled { cursor: not-allowed; opacity: .55; }
+        :focus-visible { outline: 3px solid #d89b3e; outline-offset: 4px; }
+        .shell { width: min(100% - 28px, 900px); margin: auto; }
+        header { display: flex; align-items: center; gap: 12px; padding: 26px 0; border-bottom: 1px solid var(--line); }
+        .logo { flex-shrink: 0; display: grid; place-items: center; background: var(--accent); color: white; width: 40px; height: 40px; border-radius: 12px; font-size: 24px; }
+        .muted { color: var(--muted); font-size: 13px; }
+        .brand { font-size: 17px; font-weight: 700; }
+        main { padding: 0 0 60px; }
+        .navigation-row { position: relative; padding-top: 60px; }
+        .usage { margin-bottom: 24px; padding: 20px 24px; background: #def2fc; border-radius: 14px; }
+        .usage h1 { font-size: 20px; margin: 0 0 8px; }
+        .usage p { margin: 0; font-size: 14px; }
+        .steps { display: flex; justify-content: center; gap: 28px; padding: 0; margin: 0 0 36px; list-style: none; font-size: 13px; color: var(--muted); }
+        .steps li { display: flex; gap: 9px; align-items: center; }
+        .steps span { display: grid; place-items: center; border: 1px solid var(--line); border-radius: 50%; width: 27px; height: 27px; }
+        .steps .active { color: var(--accent); font-weight: 700; }
+        .steps .active span { background: var(--accent); color: white; border-color: var(--accent); }
+        .eyebrow { color: var(--accent); font-size: 12px; letter-spacing: .12em; font-weight: 700; }
+        h1 { font-size: clamp(25px, 4.5vw, 37px); line-height: 1.6; margin: 10px 0 12px; letter-spacing: .03em; }
+        .card { background: white; border: 1px solid var(--line); border-radius: 20px; padding: 32px; box-shadow: 0 8px 28px #203e5005; }
+        label { display: block; font-weight: 700; margin-bottom: 12px; }
+        textarea, input { width: 100%; border: 1px solid #a9cddd; background: #f8fcff; border-radius: 12px; padding: 16px; color: var(--ink); }
+        textarea { resize: vertical; min-height: 120px; }
+        textarea::placeholder { color: #637f90; }
+        .examples { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+        .example { min-height: 40px; padding: 7px 14px; border: 1px solid #a9cddd; background: #e6f6ff; color: var(--ink); font-size: 13px; }
+        .example:hover:not(:disabled) { background: #def2fc; border-color: var(--accent); }
+        .primary { color: white; background: var(--accent); border: 1px solid var(--accent); font-weight: 700; }
+        .primary:hover:not(:disabled) { background: #056389; }
+        .secondary { background: white; border: 1px solid #a9cddd; color: var(--accent); }
+        .actions { display: flex; justify-content: flex-end; align-items: center; gap: 16px; margin-top: 20px; }
+        .topic { padding: 18px 22px; background: #e1f3fc; border-radius: 12px; margin: 0 0 24px; white-space: pre-wrap; overflow-wrap: anywhere; }
+        .topic small { display: block; color: var(--muted); margin-bottom: 4px; }
+        .question-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+        .badge { background: #def2fc; color: var(--accent); border-radius: 8px; padding: 4px 10px; font-size: 12px; font-weight: 700; }
+        h2 { font-size: 22px; line-height: 1.7; margin: 18px 0; overflow-wrap: anywhere; }
+        .choices { display: grid; gap: 12px; margin-top: 24px; }
+        .choice { width: 100%; text-align: left; display: flex; justify-content: space-between; gap: 16px; border: 1px solid #bddfeb; background: white; color: var(--ink); }
+        .choice:hover:not(:disabled), .choice.selected { border-color: var(--accent); background: #e6f6ff; }
+        .answer-form { margin-top: 24px; }
+        .number-row { display: flex; align-items: center; gap: 14px; }
+        .number-row input { max-width: 320px; }
+        .history-tab { position: absolute; left: 0; top: 10px; z-index: 10; display: flex; align-items: center; gap: 6px; min-height: 36px; padding: 6px 10px; border: 1px solid #a9cddd; border-left: 0; border-radius: 0 10px 10px 0; background: #def2fc; color: var(--ink); }
+        .history-tab-label { font-size: 13px; font-weight: 700; }
+        .history-count { font-size: 12px; }
+        .history-panel { position: fixed; inset: 0 auto 0 0; margin: 0; width: min(380px, calc(100vw - 40px)); height: 100dvh; max-height: 100dvh; max-width: none; padding: 0; border: 0; border-right: 1px solid var(--line); background: #f8fcff; color: var(--ink); box-shadow: 8px 0 32px #203e5020; }
+        .history-panel::backdrop { background: #203e5040; }
+        .history-panel[open] { display: flex; flex-direction: column; animation: slide-in .18s ease-out; }
+        .history-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--line); background: #def2fc; }
+        .history-header h2 { font-size: 18px; margin: 0; }
+        .history-content { flex: 1; min-height: 0; overflow-y: auto; padding: 20px; overscroll-behavior: contain; }
+        @keyframes slide-in { from { transform: translateX(-100%); } to { transform: translateX(0); } }
+        @media (prefers-reduced-motion: reduce) { .history-panel[open] { animation: none; } }
+        .history-item { padding: 16px 0; border-top: 1px solid var(--line); }
+        .history-item p { margin: 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+        .history-item .answer { background: #e1f3fc; padding: 10px 16px; border-radius: 10px; margin-left: 30px; }
+        .loading { display: flex; align-items: center; gap: 12px; padding: 22px 0; color: var(--accent); }
+        .spinner { width: 20px; height: 20px; border: 2px solid #b9e1f3; border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; flex-shrink: 0; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+        .error { margin-top: 20px; padding: 18px; border: 1px solid #e8b6aa; border-radius: 12px; background: #fff3ef; color: #953e2c; }
+        .error p { margin: 0 0 12px; }
+        .gauge { margin-top: 20px; padding: 16px 20px; background: white; border: 1px solid var(--line); border-radius: 14px; }
+        .gauge-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
+        .gauge-row strong { color: var(--accent); font-size: 20px; }
+        .gauge-track { height: 16px; background: #e1f3fc; border-radius: 999px; overflow: hidden; }
+        .gauge-fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width .4s ease; }
+        .recommendation { background: #def2fc; text-align: center; padding: 28px; border-radius: 14px; }
+        .recommendation h1 { color: var(--accent); }
+        .result-section { margin-top: 28px; white-space: pre-wrap; overflow-wrap: anywhere; }
+        h3 { font-size: 16px; margin: 0 0 12px; }
+        .result-section p { margin: 0; }
+        .result-section ul { padding-left: 24px; margin: 0; }
+        .comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+        .comparison section { padding: 20px; background: #f0f9ff; border-radius: 12px; }
+        @media (max-width: 600px) {
+            .card { padding: 22px; } .steps { gap: 14px; font-size: 12px; }
+            .comparison { grid-template-columns: 1fr; gap: 16px; }
+            .actions { flex-direction: column; align-items: stretch; }
+        }
+    </style>
+</head>
+<body>
+    <div id="app" class="shell" v-cloak>
+        <dialog id="history-panel" ref="historyPanel" class="history-panel" aria-labelledby="history-title" @close="historyOpen = false" @click="closeHistoryOnBackdrop">
+            <div class="history-header"><h2 id="history-title">質問と回答の履歴</h2><button type="button" class="secondary" autofocus @click="closeHistory">閉じる</button></div>
+            <div class="history-content">
+                <div v-if="stage !== 'start'" class="topic"><small>今回の相談</small>{{ consultation }}</div>
+                <p v-if="!history.length && !(pending && pending.answer !== null)" class="muted">まだ回答履歴はありません。</p>
+                <div v-for="(item, i) in history" :key="i" class="history-item"><span class="badge">質問 {{ i + 1 }}</span><p>{{ item.question }}</p><p class="answer"><small>あなたの回答</small><br>{{ item.answer }}</p></div>
+                <div v-if="pending && pending.answer !== null" class="history-item"><span class="badge">{{ loading ? '送信中' : '未完了' }}</span><p>{{ question.question }}</p><p class="answer"><small>あなたの回答</small><br>{{ pending.answer }}</p></div>
+            </div>
+        </dialog>
+        <header><span class="logo" aria-hidden="true">✦</span><span class="brand">AI意思決定サポーター</span></header>
+        <main :aria-busy="loading">
+            <div class="navigation-row">
+        <button ref="historyTab" type="button" class="history-tab" aria-controls="history-panel" aria-haspopup="dialog" :aria-expanded="historyOpen" @click="openHistory">
+            <span class="history-tab-label">履歴</span><span class="history-count">{{ history.length }}</span><span aria-hidden="true">›</span>
+        </button>
+            <ol class="steps" aria-label="相談のステップ">
+                <li :class="{ active: stage === 'start' }" :aria-current="stage === 'start' ? 'step' : null"><span>1</span>相談する</li>
+                <li :class="{ active: stage === 'question' }" :aria-current="stage === 'question' ? 'step' : null"><span>2</span>条件を整理</li>
+                <li :class="{ active: stage === 'result' }" :aria-current="stage === 'result' ? 'step' : null"><span>3</span>おすすめ</li>
+            </ol>
+            </div>
+            <section v-if="stage === 'start'">
+                <section class="usage" aria-labelledby="usage-heading">
+                    <h1 id="usage-heading">使い方</h1>
+                    <p>迷っている内容を入力し、AIの質問に回答すると、おすすめと理由が表示されます。</p>
+                </section>
+                <form class="card" @submit.prevent="startConsultation">
+                    <label for="consultation">何について迷っていますか？</label>
+                    <textarea id="consultation" ref="consultationInput" v-model="consultation" :disabled="loading" rows="4" placeholder="例：大学用のPCをノートPCにするか、デスクトップPCにするか迷っています。"></textarea>
+                    <div class="examples" role="group" aria-label="相談例を入力">
+                        <button v-for="example in examples" :key="example.label" type="button" class="example" :disabled="loading" @click="consultation = example.text">{{ example.label }}</button>
+                    </div>
+                    <div class="actions"><button type="submit" class="primary" :disabled="loading">相談する <span aria-hidden="true">→</span></button></div>
+                </form>
+            </section>
+            <template v-if="stage !== 'start'">
+                <div class="topic"><small>今回の相談</small>{{ consultation }}</div>
+                <section v-if="stage === 'question' && question" class="card">
+                    <div class="question-top"><span class="badge">AIからの質問</span><span class="muted">質問 {{ history.length + 1 }}</span></div>
+                    <h2 ref="questionHeading" tabindex="-1">{{ question.question }}</h2>
+                    <div v-if="question.answer_type === 'choice'" class="choices">
+                        <button v-for="option in question.options" :key="option" type="button" class="choice" :class="{ selected: selectedOption === option }" :disabled="loading" @click="choose(option)"><span>{{ option }}</span><span aria-hidden="true">→</span></button>
+                        <button v-if="!question.options.some(option => /わから|分から|決められない|未定|どちらとも/.test(option))" type="button" class="choice" :disabled="loading" @click="choose('わからない・決められない')"><span>わからない・決められない</span><span aria-hidden="true">→</span></button>
+                    </div>
+                    <form v-if="question.answer_type !== 'choice' || showOther" class="answer-form" @submit.prevent="submitInput">
+                        <template v-if="question.answer_type === 'number'">
+                            <label for="numberAnswer">数値を入力してください</label>
+                            <div class="number-row"><input id="numberAnswer" v-model="answerInput" type="number" step="any" :disabled="loading" aria-describedby="answerUnit"><span id="answerUnit">{{ question.unit }}</span></div>
+                        </template>
+                        <template v-else><label for="textAnswer">{{ showOther ? 'その他の回答を入力してください' : 'あなたの回答' }}</label><textarea id="textAnswer" ref="textAnswer" v-model="answerInput" :disabled="loading" rows="3"></textarea></template>
+                        <div class="actions"><button type="submit" class="primary" :disabled="loading">{{ question.answer_type === 'number' ? '決定' : '送信' }}</button></div>
+                    </form>
+                    <div class="actions" v-if="stage === 'question'">
+                        <button type="button" class="secondary" :disabled="loading" @click="finishEarly">ここで結論を出す</button>
+                    </div>
+                </section>
+                <section v-if="stage === 'result' && result" class="card">
+                    <div class="recommendation"><span class="eyebrow">あなたへのおすすめ</span><h1 ref="resultHeading" tabindex="-1">{{ result.recommendation }}</h1></div>
+                    <section class="result-section"><h3>判断に使った条件</h3><ul><li v-for="(condition, i) in result.conditions" :key="i">{{ condition }}</li></ul></section>
+                    <section class="result-section"><h3>おすすめする理由</h3><p>{{ result.reason }}</p></section>
+                    <div class="comparison"><section class="result-section"><h3>メリット</h3><ul><li v-for="(pro, i) in result.pros" :key="i">{{ pro }}</li></ul></section><section class="result-section"><h3>デメリット</h3><ul><li v-for="(con, i) in result.cons" :key="i">{{ con }}</li></ul></section></div>
+                    <section class="result-section"><h3>別の選択肢が向いている場合</h3><p>{{ result.alternative }}</p></section>
+                    <div class="actions"><button class="primary" type="button" @click="reset">別の相談をする</button></div>
+                </section>
+            </template>
+            <div v-if="stage === 'question' || stage === 'result'" class="gauge">
+                <div class="gauge-row"><span class="muted">結論を出せる確信度</span><strong>{{ confidence }}%</strong></div>
+                <div class="gauge-track" role="progressbar" :aria-valuenow="confidence" aria-valuemin="0" aria-valuemax="100" aria-label="確信度"><div class="gauge-fill" :style="{ width: Math.min(confidence, 100) + '%' }"></div></div>
+            </div>
+            <div v-if="loading" class="loading" role="status"><span class="spinner" aria-hidden="true"></span>{{ pending && pending.forceResult ? 'AIがおすすめをまとめています…' : 'AIが次の質問を考えています…' }}</div>
+            <div v-if="error" class="error" role="alert"><p>{{ error }}</p><button v-if="pending" class="secondary" type="button" :disabled="loading" @click="sendRequest">同じ内容で再試行</button></div>
+            <p v-if="pending && pending.answer !== null" class="muted">送信した回答：{{ pending.answer }}</p>
+        </main>
+    </div>
+    <noscript>このアプリを利用するには、ブラウザのJavaScriptを有効にしてください。</noscript>
+    <script>
+        Vue.createApp({
+            data() {
+                return {
+                    stage: 'start', consultation: '', question: null, result: null, history: [],
+                    answerInput: '', selectedOption: '', showOther: false, loading: false, error: '', pending: null, historyOpen: false, confidence: 0,
+                    examples: [
+                        { label: 'PC選び', text: '大学用のPCをノートPCにするかデスクトップPCにするか迷っています。' },
+                        { label: '車の利用', text: '車を買うかカーシェアを利用するか迷っています。' },
+                        { label: '旅行先', text: '次の休日に、温泉旅行に行くか街歩きに行くか迷っています。' }
+                    ]
+                };
+            },
+            methods: {
+                openHistory() {
+                    this.$refs.historyPanel.showModal();
+                    this.historyOpen = true;
+                },
+                closeHistory() {
+                    this.$refs.historyPanel.close();
+                    this.historyOpen = false;
+                    this.$refs.historyTab.focus();
+                },
+                closeHistoryOnBackdrop(event) {
+                    if (event.target !== this.$refs.historyPanel) return;
+                    const bounds = this.$refs.historyPanel.getBoundingClientRect();
+                    if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) this.closeHistory();
+                },
+                startConsultation() {
+                    if (this.loading) return;
+                    if (!this.consultation.trim()) { this.error = '相談内容を入力してください。'; return; }
+                    this.pending = { consultation: this.consultation.trim(), history: [], answer: null };
+                    this.confidence = 0;
+                    return this.sendRequest();
+                },
+                choose(option) {
+                    if (this.loading) return;
+                    this.selectedOption = option;
+                    this.showOther = option.trim() === 'その他';
+                    if (this.showOther) {
+                        this.error = ''; this.pending = null;
+                        this.$nextTick(() => this.$refs.textAnswer?.focus());
+                        return;
+                    }
+                    return this.submitAnswer(option);
+                },
+                submitInput() {
+                    if (this.loading || !this.question) return;
+                    const value = String(this.answerInput).trim();
+                    if (!value) { this.error = '回答を入力してください。'; return; }
+                    if (this.question.answer_type === 'number' && !Number.isFinite(Number(value))) {
+                        this.error = '有効な数値を入力してください。'; return;
+                    }
+                    return this.submitAnswer(this.question.answer_type === 'number' ? `${value}${this.question.unit || ''}` : value);
+                },
+                submitAnswer(answer) {
+                    if (this.loading || !this.question) return;
+                    // Commit history only after success so retries never duplicate answers.
+                    this.pending = { consultation: this.consultation, history: [...this.history, { question: this.question.question, answer }], answer };
+                    return this.sendRequest();
+                },
+                finishEarly() {
+                    if (this.loading || !this.question) return;
+                    this.pending = { consultation: this.consultation, history: [...this.history], answer: null, forceResult: true };
+                    return this.sendRequest();
+                },
+                parseResponse(payload) {
+                    let data = payload?.processed_text ?? payload;
+                    if (typeof data === 'string') {
+                        const text = data.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+                        try { data = JSON.parse(text); } catch { throw new Error('AIの応答を読み取れませんでした。再試行してください。'); }
+                    }
+                    const nonempty = value => typeof value === 'string' && value.trim().length > 0;
+                    const list = value => Array.isArray(value) && value.length > 0 && value.every(nonempty);
+                    if (data?.status === 'question' && nonempty(data.question)) {
+                        if (!['choice', 'number', 'text'].includes(data.answer_type)) throw new Error('AIの回答形式が不正です。再試行してください。');
+                        if (data.answer_type === 'choice' && (!list(data.options) || data.options.length < 2 || data.options.length > 5 || new Set(data.options).size !== data.options.length)) throw new Error('AIの選択肢が不正です。再試行してください。');
+                        if (data.answer_type === 'number' && typeof data.unit !== 'string') throw new Error('数値の単位を取得できませんでした。再試行してください。');
+                        const q = String(data.question).replace(/[\s、。・?？]/g, '');
+                        if (q.length <= 3 || /^(わから|分から|決められ|まだわから|どちらとも|その他|はい|いいえ|未定)/.test(q)) throw new Error('AIの質問文が不適切でした。再試行してください。');
+                        if (/選択肢/.test(q) || /\d[\.．、)）]/.test(q)) throw new Error('AIの質問文に選択肢が埋め込まれていました。再試行してください。');
+                        return data;
+                    }
+                    if (data?.status === 'result' && ['recommendation', 'reason', 'alternative'].every(key => nonempty(data[key])) && ['conditions', 'pros', 'cons'].every(key => list(data[key]))) return data;
+                    throw new Error('AIから必要な情報を取得できませんでした。再試行してください。');
+                },
+                async sendRequest() {
+                    if (this.loading || !this.pending) return;
+                    this.loading = true; this.error = '';
+                    const submitted = this.pending;
+                    const controller = new AbortController();
+                    const timeout = setTimeout(() => controller.abort(), 120000);
+                    try {
+                        const response = await fetch('/send_api', {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
+                            body: JSON.stringify({
+                                consultation: submitted.consultation, history: submitted.history,
+                                ...(submitted.forceResult ? { force_result: true } : {})
+                            })
+                        });
+                        const payload = await response.json();
+                        if (!response.ok) throw new Error(typeof payload.error === 'string' ? payload.error : 'AIとの通信に失敗しました。時間をおいて再試行してください。');
+                        const data = this.parseResponse(payload);
+                        if (data.status === 'question' && submitted.forceResult) throw new Error('結論を求めましたが、AIが質問を返しました。再試行してください。');
+                        this.consultation = submitted.consultation; this.history = submitted.history; this.stage = data.status;
+                        this.question = data.status === 'question' ? data : null;
+                        this.result = data.status === 'result' ? data : null;
+                        this.confidence = data.status === 'result' ? 100 : (Number.isFinite(data.confidence) ? data.confidence : 0);
+                        this.answerInput = ''; this.selectedOption = ''; this.showOther = false; this.pending = null;
+                        this.$nextTick(() => (this.$refs.questionHeading || this.$refs.resultHeading)?.focus());
+                    } catch (error) {
+                        this.error = error.name === 'AbortError' ? '応答に時間がかかっています。入力は保持されています。再試行してください。' : error instanceof TypeError ? 'AIとの通信に失敗しました。接続を確認して再試行してください。' : error instanceof SyntaxError ? 'サーバーの応答を読み取れませんでした。再試行してください。' : error.message;
+                    } finally {
+                        clearTimeout(timeout); this.loading = false;
+                    }
+                },
+                reset() {
+                    if (this.loading) return;
+                    this.stage = 'start'; this.consultation = ''; this.question = null; this.result = null;
+                    this.history = []; this.answerInput = ''; this.selectedOption = ''; this.showOther = false;
+                    this.error = ''; this.pending = null; this.confidence = 0;
+                    this.$nextTick(() => this.$refs.consultationInput?.focus());
+                }
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>

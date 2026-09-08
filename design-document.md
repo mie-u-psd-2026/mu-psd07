@@ -376,7 +376,7 @@ AIは質問に合わせて、
 | モバイル対応 | スマートフォンでも押しやすい大きさのボタンにする |
 | 多重送信防止 | AI処理中は他の回答ボタンを押せない |
 | エラー処理 | 通信失敗時にも直前の回答を保持する |
-| セキュリティ | OpenRouter APIキーをフロント側へ直接記述しない |
+| セキュリティ | AIへの接続とモデル設定はバックエンドで管理する |
 | 拡張性 | 特定の相談ジャンルに限定しない |
 | 保守性 | AIの応答をJSON形式に統一する |
 
@@ -389,8 +389,12 @@ AIは質問に合わせて、
 | フロントエンド | Vue.js / HTML5 + CSS3 |
 | バックエンド | Flask |
 | 通信方式 | Fetch API / JSON |
-| LLM | OpenRouter API |
-| 利用モデル | OpenAI / Anthropic / Google / Mistral等 |
+| LLM | Ollama（ローカル、OpenAI互換API） |
+| 利用モデル | gemma3:4b（環境変数 OLLAMA_MODEL で変更可能） |
+
+実装は `frontend/index.html` と `backend/app.py` に分離する。
+AIへの日本語指示は `backend/prompt.txt`、Python依存関係は `backend/requirements.txt` で管理する。
+バックエンドでJSONスキーマを指定し、生成結果を検証してから画面へ返す。
 
 ---
 
