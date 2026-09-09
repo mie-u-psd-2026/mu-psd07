@@ -189,7 +189,54 @@ def asks_direct_choice(question, consultation):
         return False
     needle = normalize_text(consultation)
     parts = re.split(r'[と・、,。か\s]', raw)
-    return sum(1 for part in parts if len(normalize_text(part)) > 1 and normalize_text(part) in needle) >= 2
+    matches = 0
+    for part in parts:
+        norm = normalize_text(part)
+        if norm and norm in needle:
+            matches += 1
+    return matches >= 2
+
+
+def presumes_single_candidate(question, consultation):
+    raw = unicodedata.normalize('NFKC', question).casefold()
+    m = re.search(r'([^、,，。?？\s]{2,15})(場合|なら|のとき|だったら|ならば|でしたら)', raw)
+    if not m:
+        return False
+    premise = normalize_text(m.group(1))
+    if len(premise) < 2:
+        return False
+    candidates = extract_candidates(consultation)
+    if len(candidates) < 2:
+        return False
+    for candidate in candidates:
+        cn = normalize_text(candidate)
+        if premise in cn or cn in premise:
+            return True
+        for start in range(len(cn) - 1):
+            if cn[start:start + 2] in premise:
+                return True
+    return False
+
+
+def clean_conditional_recommendation(recommendation):
+    markers = ('の場合', 'ならば', 'なら', 'だったら', 'のとき', 'でしたら', '場合、', '場合に', '場合でいうと', 'でいうと', 'に限れば')
+    head = recommendation
+    for marker in markers:
+        idx = recommendation.find(marker)
+        if idx != -1:
+            head = recommendation[:idx].strip('、,，。 「」')
+            break
+    if not head:
+        return recommendation
+    return head
+
+
+def asks_comparison_result(question, consultation):
+    raw = unicodedata.normalize('NFKC', question).casefold()
+    if not re.search(r'どちらが|どっちが|どれが|どちらの方が|どっちの方が', raw):
+        return False
+    candidates = extract_candidates(consultation)
+    return len(candidates) >= 2
 
 
 def reuses_last_answer(question, history):
@@ -198,6 +245,26 @@ def reuses_last_answer(question, history):
     candidate = normalize_text(question)
     last_answer = normalize_text(history[-1]['answer'])
     return last_answer and (candidate == last_answer or candidate in last_answer or last_answer in candidate)
+
+
+RESTATEMENT_MARKERS = ('とのことですが', 'とのことでしたが', 'と伺いました', 'ということですね',
+                      '迷っていますが', '迷っているのですが', 'ようですね', 'なんですね', 'ですが')
+
+
+def question_restates_consultation(question, consultation):
+    raw = unicodedata.normalize('NFKC', question).casefold()
+    if not any(marker in raw for marker in RESTATEMENT_MARKERS):
+        return False
+    needle = normalize_text(consultation)
+    head = normalize_text(re.split(r'[、,，。\n]', question)[0])
+    if len(needle) < 6 or len(head) < 4:
+        return False
+    common = 0
+    for a, b in zip(head, needle):
+        if a != b:
+            break
+        common += 1
+    return common >= 6
 
 
 TIME_TOPIC_MARKERS = ('時間', '所要', '通勤', '移動', '確保', '合計', '平均', '毎日')
@@ -415,8 +482,8 @@ def send_api():
             ):
                 messages[0]['content'] += '\n直前の生成候補「' + result['question'] + '」（condition: ' + (result.get('condition') or 'なし') + '）は回答済みの同じ判断条件の繰り返しなので却下しました。この質問の言い換えも禁止です。別の判断条件を質問してください。'
                 continue
-            if result['status'] == 'question' and (is_filler_question(result['question']) or reuses_last_answer(result['question'], history) or is_malformed_question(result['question']) or asks_direct_choice(result['question'], consultation) or asks_user_to_decide(result['question'], consultation) or has_unrelated_choice(result['question'], result.get('options', []))):
-                messages[0]['content'] += '\n直前の生成候補の質問文「' + result['question'] + '」は定型句、直前の回答の使い回し、選択肢の埋め込み、相談の結論をそのまま聞き返す直接比較、ユーザーに結論を直接選ばせる質問、または場所などの質問トピックと無関係な語句を含む選択肢だったため却下しました。質問トピックに直結する自然な選択肢、または判断材料となる具体的な条件（時間・予算・疲れ具合・同行者など）を1つだけ質問してください。'
+            if result['status'] == 'question' and (is_filler_question(result['question']) or reuses_last_answer(result['question'], history) or is_malformed_question(result['question']) or asks_direct_choice(result['question'], consultation) or asks_user_to_decide(result['question'], consultation) or has_unrelated_choice(result['question'], result.get('options', [])) or question_restates_consultation(result['question'], consultation) or asks_comparison_result(result['question'], consultation) or presumes_single_candidate(result['question'], consultation)):
+                messages[0]['content'] += '\n直前の生成候補の質問文「' + result['question'] + '」は定型句、直前の回答の使い回し、選択肢の埋め込み、相談の結論をそのまま聞き返す直接比較、ユーザーに結論を直接選ばせる質問、片方の候補だけを前提にした質問、場所などの質問トピックと無関係な語句を含む選択肢、または相談内容の引き写し・前置き（「〜とのことですが」など）だったため却下しました。質問トピックに直結する自然な選択肢、または判断材料となる具体的な条件（時間・予算・疲れ具合・同行者など）を1つだけ、前置きなしで質問してください。'
                 continue
             if result['status'] == 'question' and result['answer_type'] == 'text':
                 unit = numeric_unit_for(result['question'])
@@ -441,6 +508,8 @@ def send_api():
             if result['status'] == 'result' and require_result and attempt < 2 and (is_vague_recommendation(result['recommendation']) or is_conditional_recommendation(result['recommendation'])):
                 messages[0]['content'] += '\n「' + result['recommendation'] + '」は曖昧または条件文（「の場合」「なら」など）なので却下しました。比較中の候補名を1つだけ明記して最終結果を再生成してください。'
                 continue
+            if result['status'] == 'result' and is_conditional_recommendation(result['recommendation']):
+                result['recommendation'] = clean_conditional_recommendation(result['recommendation'])
             if result['status'] == 'result' and len(history) < MIN_QUESTIONS_FOR_RESULT and not force_result:
                 asked = {normalize_text(item['question']) for item in history}
                 fallback = next(
@@ -459,4 +528,9 @@ def send_api():
 
 
 if __name__ == '__main__':
-    app.run(host='127.0.0.1', port=5000)
+    app.run(
+        host='127.0.0.1',
+        port=5000,
+        use_reloader=True,
+        extra_files=[str(BACKEND_DIR / 'prompt.txt')],
+    )
