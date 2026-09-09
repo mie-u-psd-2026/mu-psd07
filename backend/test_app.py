@@ -6,7 +6,10 @@ from unittest.mock import patch
 from backend.app import (app, client, OLLAMA_MODEL, SYSTEM_PROMPT, MAX_QUESTIONS,
                          MIN_QUESTIONS_FOR_RESULT, FALLBACK_QUESTIONS, is_vague_recommendation,
                          is_conditional_recommendation, is_filler_question, is_malformed_question,
-                         reuses_last_answer, asks_direct_choice)
+                         reuses_last_answer, asks_direct_choice, asks_user_to_decide, numeric_unit_for,
+                         has_unrelated_choice, is_repeated_question, has_time_topic, condition_repeated,
+                         result_gate_issue, result_contradicts_history, result_reason_is_grounded,
+                         result_addresses_all_candidates)
 
 
 class AppTests(unittest.TestCase):
@@ -15,7 +18,7 @@ class AppTests(unittest.TestCase):
         self.question = {
             'status': 'question', 'question': '持ち運ぶ頻度はどのくらいですか？',
             'answer_type': 'choice', 'options': ['毎日', '週に数回', 'ほとんどない'],
-            'confidence': 30,
+            'condition': '頻度', 'confidence': 30,
         }
         self.result = {
             'status': 'result', 'recommendation': 'ノートPC', 'conditions': ['持ち運ぶ'],
@@ -40,6 +43,70 @@ class AppTests(unittest.TestCase):
                             {'consultation': 'PC', 'history': [{'question': 'q', 'answer': 'a'}] * (MAX_QUESTIONS + 1)}]:
                 self.assertEqual(self.http.post('/send_api', json=payload).status_code, 400)
             create.assert_not_called()
+
+    def test_has_unrelated_choice(self):
+        self.assertTrue(has_unrelated_choice(
+            '普段、お仕事や勉強をする場所はいかがなところですか？',
+            ['自宅の机や部屋', 'カフェやコワーキングスペース', 'パソコンを搭載したPC'],
+        ))
+        self.assertFalse(has_unrelated_choice(
+            '普段、お仕事や勉強をする場所はいかがなところですか？',
+            ['自宅の机や部屋', 'カフェやコワーキングスペース', '図書館'],
+        ))
+        self.assertFalse(has_unrelated_choice(
+            '必要なPCの性能はどのレベルですか？',
+            ['パソコンを搭載したPC', 'ノートPC', 'デスクトップPC'],
+        ))
+
+    def test_unrelated_choice_question_is_rejected_and_retried(self):
+        bad = {**self.question, 'question': '普段、お仕事や勉強をする場所はいかがなところですか？',
+               'options': ['自宅の机や部屋', 'カフェやコワーキングスペース', 'パソコンを搭載したPC']}
+        good = {**self.question, 'question': '移動にはどのくらい時間を使えますか？'}
+        history = [{'question': 'PCの利用目的は？', 'answer': 'オンライン授業'}]
+        with patch.object(client.chat.completions, 'create', side_effect=[
+            self.completion(json.dumps(bad)), self.completion(json.dumps(good))
+        ]) as create:
+            response = self.http.post('/send_api', json={'consultation': '大学用PCをノートかデスクトップか迷っています', 'history': history})
+        self.assertEqual(response.get_json()['question'], good['question'])
+        self.assertEqual(create.call_count, 2)
+        self.assertIn('却下しました', create.call_args_list[1].kwargs['messages'][0]['content'])
+
+    def test_prompt_requires_explicit_target_for_number_questions(self):
+        self.assertIn('何に対する値を聞くのかを質問文に必ず明記', SYSTEM_PROMPT)
+        self.assertIn('通勤にかかる時間はどのくらいですか？', SYSTEM_PROMPT)
+        self.assertIn('対象（通勤・移動・仕事など）が不明で答えられない曖昧な質問は禁止', SYSTEM_PROMPT)
+
+    def test_numeric_unit_for(self):
+        self.assertEqual(numeric_unit_for('普段、通勤時間はどのくらいかかりますか？'), '時間')
+        self.assertEqual(numeric_unit_for('移動にはどのくらい時間を使えますか？'), '時間')
+        self.assertEqual(numeric_unit_for('PCに使える予算はいくらですか？'), '円')
+        self.assertEqual(numeric_unit_for('カーシェアに月いくらまで使えますか？'), '円')
+        self.assertEqual(numeric_unit_for('会社までの距離はどのくらいですか？'), 'km')
+        self.assertEqual(numeric_unit_for('休暇は何日間取れますか？'), '日')
+        self.assertEqual(numeric_unit_for('利用頻度はどのくらいですか？'), None)
+        self.assertEqual(numeric_unit_for('気になっている点があれば教えてください。'), None)
+
+
+    def test_text_time_question_is_converted_to_number(self):
+        text_question = {**self.question, 'question': '普段、通勤時間はどのくらいかかりますか？', 'answer_type': 'text'}
+        history = [{'question': 'カークラブの利用頻度は？', 'answer': '毎日'}]
+        with patch.object(client.chat.completions, 'create', return_value=self.completion(json.dumps(text_question))):
+            response = self.http.post('/send_api', json={'consultation': '車を買うかカーシェアか', 'history': history})
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload['status'], 'question')
+        self.assertEqual(payload['answer_type'], 'number')
+        self.assertEqual(payload['unit'], '時間')
+        self.assertEqual(payload['question'], text_question['question'])
+
+
+    def test_text_input_question_stays_text(self):
+        textual = {**self.question, 'question': '気になっている点があれば教えてください。', 'answer_type': 'text'}
+        with patch.object(client.chat.completions, 'create', return_value=self.completion(json.dumps(textual))):
+            response = self.http.post('/send_api', json={'consultation': '転職するか今の仕事を続けるか', 'history': [{'question': '今の仕事の満足度は？', 'answer': '普通'}]})
+        payload = response.get_json()
+        self.assertEqual(payload['answer_type'], 'text')
+
 
     def test_japanese_prompt_and_history_reach_selected_model(self):
         history = [{'question': '持ち運びますか？', 'answer': 'はい'}]
@@ -66,6 +133,91 @@ class AppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()['question'], next_question['question'])
         self.assertEqual(create.call_count, 2)
+
+    def test_condition_repeated_helper(self):
+        history = [{'question': '通学に何分かかりますか？', 'answer': '30分', 'condition': '通学時間'}]
+        self.assertTrue(condition_repeated('通学時間', history))
+        self.assertTrue(condition_repeated('通学時間です', history))
+        self.assertFalse(condition_repeated('疲労', history))
+        self.assertFalse(condition_repeated('予算', [{'question': 'q', 'answer': 'a', 'condition': '通学時間'}]))
+        self.assertFalse(condition_repeated('', history))
+        self.assertFalse(condition_repeated('疲労', [{'question': 'q', 'answer': 'a'}]))
+
+    def test_same_condition_question_is_rejected_and_retried(self):
+        dup = {**self.question, 'question': '通学の負担を感じることはありますか？', 'condition': '通学時間',
+               'options': ['感じやすい', 'ふつう', 'ほとんど感じない']}
+        good = {**self.question, 'question': '今の疲れ具合はいかがですか？', 'condition': '疲労',
+                'options': ['元気', '少し疲れている', 'かなり疲れている']}
+        history = [{'question': '通学に何分かかりますか？', 'answer': '30分', 'condition': '通学時間'}]
+        with patch.object(client.chat.completions, 'create', side_effect=[
+            self.completion(json.dumps(dup)), self.completion(json.dumps(good))
+        ]) as create:
+            response = self.http.post('/send_api', json={'consultation': '通学かリモートか迷っています', 'history': history})
+        self.assertEqual(response.get_json()['question'], good['question'])
+        self.assertEqual(response.get_json()['condition'], '疲労')
+        self.assertEqual(create.call_count, 2)
+        self.assertIn('同じ判断条件の繰り返し', create.call_args_list[1].kwargs['messages'][0]['content'])
+
+    def test_different_condition_question_is_accepted(self):
+        question = {**self.question, 'question': '通学の負担を感じることはありますか？', 'condition': '通学の負担',
+                    'options': ['感じやすい', 'ふつう', 'ほとんど感じない']}
+        history = [{'question': '通学に何分かかりますか？', 'answer': '30分', 'condition': '通学時間'}]
+        with patch.object(client.chat.completions, 'create', return_value=self.completion(json.dumps(question))) as create:
+            response = self.http.post('/send_api', json={'consultation': '通学かリモートか迷っています', 'history': history})
+        self.assertEqual(response.get_json()['question'], question['question'])
+        self.assertEqual(response.get_json()['condition'], '通学の負担')
+        self.assertEqual(create.call_count, 1)
+
+    def test_text_dedup_still_applies_when_condition_labels_differ(self):
+        dup = {**self.question, 'question': '移動に使える時間、1日にどれくらい確保できますか？', 'condition': '移動時間',
+               'options': ['1時間', '2時間', '3時間']}
+        good = {**self.question, 'question': '同行者は誰と行きますか？', 'condition': '同行者',
+                'options': ['ひとり', '家族', '友人']}
+        history = [{'question': '1日の所要時間はどのくらいですか？', 'answer': '6時間', 'condition': '通学時間'}]
+        self.assertFalse(condition_repeated('移動時間', history))
+        with patch.object(client.chat.completions, 'create', side_effect=[
+            self.completion(json.dumps(dup)), self.completion(json.dumps(good))
+        ]) as create:
+            response = self.http.post('/send_api', json={'consultation': '通学かリモートか迷っています', 'history': history})
+        self.assertEqual(response.get_json()['question'], good['question'])
+        self.assertEqual(create.call_count, 2)
+        self.assertIn('同じ判断条件の繰り返し', create.call_args_list[1].kwargs['messages'][0]['content'])
+
+    def test_time_topic_question_is_repeated_with_paraphrase(self):
+        q6 = '1日の所要時間は、通勤時間とリモートワークの時間を合わせて、平均して何時間ほど確保できますか？'
+        q7 = 'リモートワークと通勤を合わせた1日の所要時間は、平均して何時間ほどですか？'
+        self.assertTrue(has_time_topic(q6))
+        self.assertTrue(has_time_topic(q7))
+        self.assertTrue(is_repeated_question(q7, [{'question': q6, 'answer': '7時間'}]))
+        self.assertTrue(is_repeated_question(q6, [{'question': q7, 'answer': '7時間'}]))
+
+    def test_unrelated_time_questions_are_not_repeated(self):
+        self.assertFalse(is_repeated_question(
+            '通勤にかかるお金はどのくらいですか？',
+            [{'question': '通勤時間はどのくらいですか？', 'answer': '60分'}],
+        ))
+        self.assertFalse(is_repeated_question(
+            '通勤時間はどのくらいですか？',
+            [{'question': '移動費の予算はいくらですか？', 'answer': '1万円'}],
+        ))
+
+    def test_time_topic_duplicate_is_rejected_and_retried(self):
+        q5 = '移動に使える時間、1日にどれくらい確保できますか？'
+        q3 = '1日の所要時間はどのくらいですか？'
+        dup = {**self.question, 'question': q5}
+        good = {**self.question, 'question': '現在の疲れ具合はいかがですか？',
+                'options': ['元気', '少し疲れている', 'かなり疲れている']}
+        history = [
+            {'question': '通勤時間はどのくらいですか？', 'answer': '60分'},
+            {'question': q3, 'answer': '6時間'},
+        ]
+        with patch.object(client.chat.completions, 'create', side_effect=[
+            self.completion(json.dumps(dup)), self.completion(json.dumps(good))
+        ]) as create:
+            response = self.http.post('/send_api', json={'consultation': 'リモートワークか通勤か迷っています', 'history': history})
+        self.assertEqual(response.get_json()['question'], good['question'])
+        self.assertEqual(create.call_count, 2)
+        self.assertIn('却下しました', create.call_args_list[1].kwargs['messages'][0]['content'])
 
     def test_repeated_generation_is_bounded_and_returns_result(self):
         result = {'status': 'result', 'recommendation': 'まずは近場の候補を比較', 'conditions': ['好みは未定'],
@@ -151,7 +303,7 @@ class AppTests(unittest.TestCase):
     def test_filler_question_helper(self):
         for bad in ('わからない・決められない', '決められない', 'まだわからない', 'その他', 'はい', '未定'):
             self.assertTrue(is_filler_question(bad), bad)
-        for good in ('移動に使える時間はどのくらいですか？', '予算はいくらまで使えますか？', '休日は何日間ですか？'):
+        for good in ('旅行に使える日数はどのくらいですか？', '予算はいくらまで使えますか？', '休日は何日間ですか？'):
             self.assertFalse(is_filler_question(good), good)
 
     def test_malformed_question_helper(self):
@@ -161,7 +313,7 @@ class AppTests(unittest.TestCase):
             'お昼は何にしますか？1.定食 2.ラーメン',
         ):
             self.assertTrue(is_malformed_question(bad), bad)
-        for good in ('今の疲れ具合はいかがですか？', '予算はいくらまで使えますか？', '移動に使える時間はどのくらいですか？'):
+        for good in ('今の疲れ具合はいかがですか？', '予算はいくらまで使えますか？', '旅行に使える日数はどのくらいですか？'):
             self.assertFalse(is_malformed_question(good), good)
 
     def test_asks_direct_choice_helper(self):
@@ -173,15 +325,32 @@ class AppTests(unittest.TestCase):
         ):
             self.assertTrue(asks_direct_choice(bad, consultation), bad)
         for good in (
-            '移動に使える時間はどのくらいですか？',
+            '旅行に使える日数はどのくらいですか？',
             '予算はいくらまで使えますか？',
             '温泉旅行に同行者はいますか？',
         ):
             self.assertFalse(asks_direct_choice(good, consultation), good)
 
+    def test_asks_user_to_decide_helper(self):
+        consultation = '車を買うかカーシェアを利用するか迷っています'
+        for bad in (
+            '車を購入する方が良いと思いますか？',
+            '車を購入する方にしますか？',
+            '車を購入する方がいいですか？',
+            'おすすめはどちらですか？',
+            '車を購入するかカーシェアにするか、どちらがいいと思いますか？',
+        ):
+            self.assertTrue(asks_user_to_decide(bad, consultation), bad)
+        for good in (
+            '車にかける予算はいくらまで使えますか？',
+            '車の利用頻度はどのくらいですか？',
+            '家族は何人ですか？',
+        ):
+            self.assertFalse(asks_user_to_decide(good, consultation), good)
+
     def test_direct_choice_question_is_rejected_and_retried(self):
         direct = {**self.question, 'question': '温泉旅行と街歩き、どちらの休日に向いていますか？'}
-        good = {**self.question, 'question': '移動に使える時間はどのくらいですか？'}
+        good = {**self.question, 'question': '旅行に使える日数はどのくらいですか？'}
         with patch.object(client.chat.completions, 'create', side_effect=[
             self.completion(json.dumps(direct)), self.completion(json.dumps(good))
         ]) as create:
@@ -192,7 +361,7 @@ class AppTests(unittest.TestCase):
 
     def test_malformed_question_is_rejected_and_retried(self):
         malformed = {**self.question, 'question': 'どちらで過ごしたいですか？ 選択肢：1. 温泉 2. 街歩き'}
-        good = {**self.question, 'question': '移動に使える時間はどのくらいですか？'}
+        good = {**self.question, 'question': '旅行に使える日数はどのくらいですか？'}
         history = [{'question': '休暇の過ごし方は？', 'answer': 'のんびりしたい'}]
         with patch.object(client.chat.completions, 'create', side_effect=[
             self.completion(json.dumps(malformed)), self.completion(json.dumps(good))
@@ -210,7 +379,7 @@ class AppTests(unittest.TestCase):
 
     def test_filler_question_is_rejected_and_retried(self):
         filler = {**self.question, 'question': 'わからない・決められない'}
-        good = {**self.question, 'question': '移動に使える時間はどのくらいですか？'}
+        good = {**self.question, 'question': '旅行に使える日数はどのくらいですか？'}
         history = [{'question': '休暇の過ごし方は？', 'answer': '温泉に興味がある'}]
         with patch.object(client.chat.completions, 'create', side_effect=[
             self.completion(json.dumps(filler)), self.completion(json.dumps(good))
@@ -230,6 +399,102 @@ class AppTests(unittest.TestCase):
             response = self.http.post('/send_api', json={'consultation': '温泉旅行か街歩き', 'history': history})
         self.assertEqual(response.get_json()['question'], good['question'])
         self.assertEqual(create.call_count, 2)
+
+    def test_result_contradicting_day_answer_is_rejected_and_retried(self):
+        bad = {'status': 'result', 'recommendation': '街歩き',
+               'conditions': ['日数'], 'reason': '2〜3日ですと日帰りで街歩きが適しています',
+               'pros': ['気軽に楽しめる'], 'cons': ['暑さがつらい'], 'alternative': '日帰り以外なら温泉旅行', 'confidence': 80}
+        good = {'status': 'result', 'recommendation': '温泉旅行',
+                'conditions': ['日数', '予算'], 'reason': '2〜3日の日程と50000円の予算なので温泉旅行が合います',
+                'pros': ['ゆっくり休める'], 'cons': ['移動に時間がかかる'], 'alternative': '時間のない日は街歩きが向きます', 'confidence': 90}
+        history = [
+            {'question': '旅行の日数はどのくらいですか？', 'answer': '2〜3日'},
+            {'question': '予算はいくらですか？', 'answer': '50000円'},
+            {'question': '同行者はいますか？', 'answer': '家族'},
+        ]
+        self.assertTrue(result_contradicts_history(bad, history))
+        with patch.object(client.chat.completions, 'create', side_effect=[
+            self.completion(json.dumps(bad)), self.completion(json.dumps(good))
+        ]) as create:
+            response = self.http.post('/send_api', json={'consultation': '温泉旅行か街歩き', 'history': history})
+        self.assertEqual(response.get_json()['recommendation'], '温泉旅行')
+        self.assertEqual(create.call_count, 2)
+        self.assertIn('矛盾', create.call_args_list[1].kwargs['messages'][0]['content'])
+
+    def test_result_without_candidate_comparison_is_rejected_and_retried(self):
+        bad = {'status': 'result', 'recommendation': '温泉旅行',
+               'conditions': ['重視点'], 'reason': '食べ歩きを重視しているので温泉旅行です',
+               'pros': ['食事が楽しめる'], 'cons': ['移動が多い'], 'alternative': '別の条件なら別の選択肢', 'confidence': 70}
+        good = {**bad, 'recommendation': '街歩き',
+                'reason': '食べ歩きを重視しているので街歩きを選びます',
+                'alternative': 'ゆっくり休みたいなら温泉旅行が向きます'}
+        history = [
+            {'question': '旅の重視ポイントは？', 'answer': '食べ歩きを重視'},
+            {'question': '予算は？', 'answer': '3000円'},
+            {'question': '同行者は？', 'answer': '友人'},
+        ]
+        self.assertFalse(result_addresses_all_candidates(bad, '温泉旅行か街歩き'))
+        with patch.object(client.chat.completions, 'create', side_effect=[
+            self.completion(json.dumps(bad)), self.completion(json.dumps(good))
+        ]) as create:
+            response = self.http.post('/send_api', json={'consultation': '温泉旅行か街歩き', 'history': history})
+        self.assertEqual(response.get_json()['recommendation'], '街歩き')
+        self.assertEqual(create.call_count, 2)
+        self.assertIn('比較', create.call_args_list[1].kwargs['messages'][0]['content'])
+
+    def test_result_before_min_answers_keeps_questioning(self):
+        history = [{'question': '旅の重視ポイントは？', 'answer': '食べ歩きを重視'}]
+        with patch.object(client.chat.completions, 'create', side_effect=[
+            self.completion(json.dumps(self.result)), self.completion(json.dumps(self.question))
+        ]) as create:
+            response = self.http.post('/send_api', json={'consultation': '温泉旅行か街歩き', 'history': history})
+        payload = response.get_json()
+        self.assertEqual(payload['status'], 'question')
+        self.assertEqual(create.call_count, 2)
+        self.assertIn('情報が不足', create.call_args_list[1].kwargs['messages'][0]['content'])
+
+    def test_sufficient_conditions_return_result_without_extra_questions(self):
+        result = {'status': 'result', 'recommendation': '温泉旅行',
+                  'conditions': ['重視点', '日数'], 'reason': 'ゆっくり休みたいので温泉旅行が合います',
+                  'pros': ['くつろげる'], 'cons': ['移動が必要'], 'alternative': '活動的に遊ぶなら街歩きが向きます', 'confidence': 90}
+        history = [
+            {'question': '旅の重視ポイントは？', 'answer': 'ゆっくり休みたい'},
+            {'question': '日数は？', 'answer': '2泊3日'},
+            {'question': '疲れ具合は？', 'answer': 'かなり疲れている'},
+        ]
+        with patch.object(client.chat.completions, 'create', return_value=self.completion(json.dumps(result))) as create:
+            response = self.http.post('/send_api', json={'consultation': '温泉旅行か街歩き', 'history': history})
+        self.assertEqual(response.get_json()['recommendation'], '温泉旅行')
+        self.assertEqual(create.call_count, 1)
+
+    def test_result_with_unsubstantiated_reason_is_rejected_and_retried(self):
+        bad = {'status': 'result', 'recommendation': '温泉旅行',
+               'conditions': ['予算'], 'reason': '温泉でリラックスできるからです',
+               'pros': ['癒される'], 'cons': ['遠い'], 'alternative': '近場なら街歩きが向きます', 'confidence': 80}
+        good = {**bad, 'reason': '50000円の予算と家族でゆっくりできるので温泉旅行が合います'}
+        history = [
+            {'question': '予算は？', 'answer': '50000円'},
+            {'question': '同行者は？', 'answer': '家族'},
+            {'question': '重視点は？', 'answer': 'ゆっくり休む'},
+        ]
+        self.assertFalse(result_reason_is_grounded(bad, history))
+        self.assertTrue(result_reason_is_grounded(good, history))
+        with patch.object(client.chat.completions, 'create', side_effect=[
+            self.completion(json.dumps(bad)), self.completion(json.dumps(good))
+        ]) as create:
+            response = self.http.post('/send_api', json={'consultation': '温泉旅行か街歩き', 'history': history})
+        self.assertEqual(response.get_json()['recommendation'], '温泉旅行')
+        self.assertEqual(create.call_count, 2)
+        self.assertIn('根拠', create.call_args_list[1].kwargs['messages'][0]['content'])
+
+    def test_result_gate_issue_helper(self):
+        result = {'status': 'result', 'recommendation': 'ノートPC', 'conditions': ['移動'], 'reason': '持ち運ぶのでノートPC',
+                  'pros': ['軽い'], 'cons': ['性能が低い'], 'alternative': '家で使うならデスクトップ', 'confidence': 80}
+        history = [{'question': '質問', 'answer': '持ち運ぶ'}]
+        self.assertEqual(result_gate_issue(result, 'ノートPCかデスクトップ', history), '')
+
+    def test_prompt_requires_contradiction_free_result(self):
+        self.assertIn('矛盾', SYSTEM_PROMPT)
 
     def test_max_answers_require_result(self):
         history = [{'question': '質問', 'answer': '回答'}] * MAX_QUESTIONS

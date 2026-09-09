@@ -69,6 +69,38 @@
         .history-item { padding: 16px 0; border-top: 1px solid var(--line); }
         .history-item p { margin: 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
         .history-item .answer { background: #e1f3fc; padding: 10px 16px; border-radius: 10px; margin-left: 30px; }
+        .history-result { padding: 20px 0; border-top: 2px solid var(--accent); margin-top: 8px; }
+        .history-result-header { margin-bottom: 12px; }
+        .result-badge { background: var(--accent); color: white; }
+        .history-result-title { font-size: 18px; font-weight: 700; color: var(--accent); margin: 8px 0; }
+        .history-result-section { margin: 12px 0; }
+        .history-result-section small { color: var(--muted); }
+        .history-result-section p { margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+        .history-result-section ul { padding-left: 20px; margin: 4px 0; }
+        .history-result-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        .result-history { margin: 20px 0; padding: 16px 20px; background: #f0f9ff; border-radius: 12px; }
+        .result-history-toggle { font-size: 14px; font-weight: 700; color: var(--accent); cursor: pointer; list-style: none; }
+        .result-history-toggle::-webkit-details-marker { display: none; }
+        .result-history-toggle::before { content: '▸ '; }
+        .result-history[open] > .result-history-toggle::before { content: '▾ '; }
+        .result-history-list { margin-top: 12px; }
+        .result-history-item { padding: 10px 0; border-top: 1px solid var(--line); }
+        .result-history-item:first-child { border-top: none; }
+        .result-history-question { margin: 6px 0 2px; font-size: 14px; }
+        .result-history-answer { margin: 0; padding: 8px 12px; background: #e1f3fc; border-radius: 8px; font-size: 14px; }
+        .session-list { margin: 0; padding: 0; list-style: none; }
+        .session-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 14px 0; border-top: 1px solid var(--line); }
+        .session-item:first-child { border-top: none; }
+        .session-item-main { flex: 1; min-width: 0; cursor: pointer; }
+        .session-item-main:hover { color: var(--accent); }
+        .session-item-title { font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .session-item-meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+        .session-item-delete { flex-shrink: 0; min-height: 32px; padding: 4px 10px; border: 1px solid #e8b6aa; background: #fff3ef; color: #953e2c; border-radius: 8px; font-size: 12px; }
+        .session-item-delete:hover { background: #f8d7cf; }
+        .session-detail-back { margin-bottom: 12px; }
+        .session-detail-back button { background: none; border: none; color: var(--accent); padding: 4px 0; font-size: 14px; font-weight: 700; min-height: auto; cursor: pointer; }
+        .session-detail-result { margin-top: 16px; padding: 16px; background: #def2fc; border-radius: 12px; }
+        .session-detail-result h3 { font-size: 16px; margin: 0 0 8px; color: var(--accent); }
         .loading { display: flex; align-items: center; gap: 12px; padding: 22px 0; color: var(--accent); }
         .spinner { width: 20px; height: 20px; border: 2px solid #b9e1f3; border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; flex-shrink: 0; }
         @keyframes spin { to { transform: rotate(360deg); } }
@@ -98,12 +130,69 @@
 <body>
     <div id="app" class="shell" v-cloak>
         <dialog id="history-panel" ref="historyPanel" class="history-panel" aria-labelledby="history-title" @close="historyOpen = false" @click="closeHistoryOnBackdrop">
-            <div class="history-header"><h2 id="history-title">質問と回答の履歴</h2><button type="button" class="secondary" autofocus @click="closeHistory">閉じる</button></div>
+            <div class="history-header"><h2 id="history-title">履歴</h2><button type="button" class="secondary" autofocus @click="closeHistory">閉じる</button></div>
             <div class="history-content">
-                <div v-if="stage !== 'start'" class="topic"><small>今回の相談</small>{{ consultation }}</div>
-                <p v-if="!history.length && !(pending && pending.answer !== null)" class="muted">まだ回答履歴はありません。</p>
-                <div v-for="(item, i) in history" :key="i" class="history-item"><span class="badge">質問 {{ i + 1 }}</span><p>{{ item.question }}</p><p class="answer"><small>あなたの回答</small><br>{{ item.answer }}</p></div>
-                <div v-if="pending && pending.answer !== null" class="history-item"><span class="badge">{{ loading ? '送信中' : '未完了' }}</span><p>{{ question.question }}</p><p class="answer"><small>あなたの回答</small><br>{{ pending.answer }}</p></div>
+                <template v-if="selectedSession">
+                    <div class="session-detail-back"><button type="button" @click="backToList">← 一覧に戻る</button></div>
+                    <div class="topic"><small>相談日時</small>{{ selectedSession.date }}</div>
+                    <div class="topic"><small>今回の相談</small>{{ selectedSession.consultation }}</div>
+                    <p v-if="!selectedSession.history.length" class="muted">まだ回答履歴はありません。</p>
+                    <details v-if="selectedSession.history.length" class="result-history">
+                        <summary class="result-history-toggle">質問履歴を見る（{{ selectedSession.history.length }}件）</summary>
+                        <div class="result-history-list">
+                            <div v-for="(item, i) in selectedSession.history" :key="i" class="result-history-item"><span class="badge">質問 {{ i + 1 }}</span><p class="result-history-question">{{ item.question }}</p><p class="result-history-answer">{{ item.answer }}</p></div>
+                        </div>
+                    </details>
+                    <div v-if="selectedSession.result" class="history-result">
+                        <div class="history-result-header"><span class="badge result-badge">AIのおすすめ</span></div>
+                        <p class="history-result-title">{{ selectedSession.result.recommendation }}</p>
+                        <div class="history-result-section"><small>理由</small><p>{{ selectedSession.result.reason }}</p></div>
+                        <div class="history-result-section"><small>判断条件</small><ul><li v-for="(c, i) in selectedSession.result.conditions" :key="i">{{ c }}</li></ul></div>
+                        <div class="history-result-compare">
+                            <div class="history-result-section"><small>メリット</small><ul><li v-for="(p, i) in selectedSession.result.pros" :key="i">{{ p }}</li></ul></div>
+                            <div class="history-result-section"><small>デメリット</small><ul><li v-for="(c, i) in selectedSession.result.cons" :key="i">{{ c }}</li></ul></div>
+                        </div>
+                        <div class="history-result-section"><small>別の選択肢</small><p>{{ selectedSession.result.alternative }}</p></div>
+                    </div>
+                </template>
+                <template v-else>
+                    <div v-if="stage !== 'start'" class="topic"><small>今回の相談</small>{{ consultation }}</div>
+                    <p v-if="!history.length && !(pending && pending.answer !== null)" class="muted">まだ回答履歴はありません。</p>
+                    <details v-if="stage === 'result' && history.length" class="result-history">
+                        <summary class="result-history-toggle">質問履歴を見る（{{ history.length }}件）</summary>
+                        <div class="result-history-list">
+                            <div v-for="(item, i) in history" :key="i" class="result-history-item"><span class="badge">質問 {{ i + 1 }}</span><p class="result-history-question">{{ item.question }}</p><p class="result-history-answer">{{ item.answer }}</p></div>
+                        </div>
+                    </details>
+                    <template v-else>
+                    <div v-for="(item, i) in history" :key="i" class="history-item"><span class="badge">質問 {{ i + 1 }}</span><p>{{ item.question }}</p><p class="answer"><small>あなたの回答</small><br>{{ item.answer }}</p></div>
+                    <div v-if="pending && pending.answer !== null" class="history-item"><span class="badge">{{ loading ? '送信中' : '未完了' }}</span><p>{{ question.question }}</p><p class="answer"><small>あなたの回答</small><br>{{ pending.answer }}</p></div>
+                    </template>
+                    <div v-if="stage === 'result' && result" class="history-result">
+                        <div class="history-result-header"><span class="badge result-badge">AIのおすすめ</span></div>
+                        <p class="history-result-title">{{ result.recommendation }}</p>
+                        <div class="history-result-section"><small>理由</small><p>{{ result.reason }}</p></div>
+                        <div class="history-result-section"><small>判断条件</small><ul><li v-for="(c, i) in result.conditions" :key="i">{{ c }}</li></ul></div>
+                        <div class="history-result-compare">
+                            <div class="history-result-section"><small>メリット</small><ul><li v-for="(p, i) in result.pros" :key="i">{{ p }}</li></ul></div>
+                            <div class="history-result-section"><small>デメリット</small><ul><li v-for="(c, i) in result.cons" :key="i">{{ c }}</li></ul></div>
+                        </div>
+                        <div class="history-result-section"><small>別の選択肢</small><p>{{ result.alternative }}</p></div>
+                    </div>
+                    <div class="history-result">
+                        <div class="history-result-header"><span class="badge result-badge">過去の相談</span></div>
+                        <p v-if="!savedSessions.length" class="muted">まだ過去の相談はありません。</p>
+                        <ul class="session-list">
+                            <li v-for="session in savedSessions" :key="session.id" class="session-item">
+                                <div class="session-item-main" @click="viewSession(session)" role="button" tabindex="0" @keydown.enter="viewSession(session)">
+                                    <div class="session-item-title">{{ session.consultation }}</div>
+                                    <div class="session-item-meta">{{ session.date }}<template v-if="session.result">・{{ session.result.recommendation }}</template></div>
+                                </div>
+                                <button type="button" class="session-item-delete" @click="deleteSession(session)">削除</button>
+                            </li>
+                        </ul>
+                    </div>
+                </template>
             </div>
         </dialog>
         <header><span class="logo" aria-hidden="true">✦</span><span class="brand">AI意思決定サポーター</span></header>
@@ -155,6 +244,16 @@
                 </section>
                 <section v-if="stage === 'result' && result" class="card">
                     <div class="recommendation"><span class="eyebrow">あなたへのおすすめ</span><h1 ref="resultHeading" tabindex="-1">{{ result.recommendation }}</h1></div>
+                    <details class="result-history">
+                        <summary class="result-history-toggle">質問履歴を見る（{{ history.length }}件）</summary>
+                        <div class="result-history-list">
+                            <div v-for="(item, i) in history" :key="i" class="result-history-item">
+                                <span class="badge">質問 {{ i + 1 }}</span>
+                                <p class="result-history-question">{{ item.question }}</p>
+                                <p class="result-history-answer">{{ item.answer }}</p>
+                            </div>
+                        </div>
+                    </details>
                     <section class="result-section"><h3>判断に使った条件</h3><ul><li v-for="(condition, i) in result.conditions" :key="i">{{ condition }}</li></ul></section>
                     <section class="result-section"><h3>おすすめする理由</h3><p>{{ result.reason }}</p></section>
                     <div class="comparison"><section class="result-section"><h3>メリット</h3><ul><li v-for="(pro, i) in result.pros" :key="i">{{ pro }}</li></ul></section><section class="result-section"><h3>デメリット</h3><ul><li v-for="(con, i) in result.cons" :key="i">{{ con }}</li></ul></section></div>
@@ -178,6 +277,7 @@
                 return {
                     stage: 'start', consultation: '', question: null, result: null, history: [],
                     answerInput: '', selectedOption: '', showOther: false, loading: false, error: '', pending: null, historyOpen: false, confidence: 0,
+                    savedSessions: [], selectedSession: null,
                     examples: [
                         { label: 'PC選び', text: '大学用のPCをノートPCにするかデスクトップPCにするか迷っています。' },
                         { label: '車の利用', text: '車を買うかカーシェアを利用するか迷っています。' },
@@ -186,6 +286,17 @@
                 };
             },
             methods: {
+                loadSessions() {
+                    try {
+                        this.savedSessions = JSON.parse(localStorage.getItem('savedSessions') || '[]');
+                        if (!Array.isArray(this.savedSessions)) this.savedSessions = [];
+                    } catch { this.savedSessions = []; }
+                },
+                saveSessions() {
+                    try {
+                        localStorage.setItem('savedSessions', JSON.stringify(this.savedSessions));
+                    } catch { }
+                },
                 openHistory() {
                     this.$refs.historyPanel.showModal();
                     this.historyOpen = true;
@@ -230,7 +341,9 @@
                 submitAnswer(answer) {
                     if (this.loading || !this.question) return;
                     // Commit history only after success so retries never duplicate answers.
-                    this.pending = { consultation: this.consultation, history: [...this.history, { question: this.question.question, answer }], answer };
+                    const item = { question: this.question.question, answer };
+                    if (this.question.condition) item.condition = this.question.condition;
+                    this.pending = { consultation: this.consultation, history: [...this.history, item], answer };
                     return this.sendRequest();
                 },
                 finishEarly() {
@@ -281,6 +394,7 @@
                         this.result = data.status === 'result' ? data : null;
                         this.confidence = data.status === 'result' ? 100 : (Number.isFinite(data.confidence) ? data.confidence : 0);
                         this.answerInput = ''; this.selectedOption = ''; this.showOther = false; this.pending = null;
+                        if (data.status === 'result') this.saveSession();
                         this.$nextTick(() => (this.$refs.questionHeading || this.$refs.resultHeading)?.focus());
                     } catch (error) {
                         this.error = error.name === 'AbortError' ? '応答に時間がかかっています。入力は保持されています。再試行してください。' : error instanceof TypeError ? 'AIとの通信に失敗しました。接続を確認して再試行してください。' : error instanceof SyntaxError ? 'サーバーの応答を読み取れませんでした。再試行してください。' : error.message;
@@ -292,9 +406,37 @@
                     if (this.loading) return;
                     this.stage = 'start'; this.consultation = ''; this.question = null; this.result = null;
                     this.history = []; this.answerInput = ''; this.selectedOption = ''; this.showOther = false;
-                    this.error = ''; this.pending = null; this.confidence = 0;
+                    this.error = ''; this.pending = null; this.confidence = 0; this.selectedSession = null;
                     this.$nextTick(() => this.$refs.consultationInput?.focus());
+                },
+                saveSession() {
+                    if (this.stage !== 'result' || !this.result) return;
+                    const session = {
+                        id: Date.now(),
+                        date: new Date().toLocaleString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }),
+                        consultation: this.consultation,
+                        history: this.history,
+                        result: this.result,
+                    };
+                    this.savedSessions.unshift(session);
+                    if (this.savedSessions.length > 50) this.savedSessions.length = 50;
+                    this.saveSessions();
+                },
+                viewSession(session) {
+                    this.selectedSession = session;
+                },
+                deleteSession(session) {
+                    if (!confirm('この履歴を削除しますか？')) return;
+                    this.savedSessions = this.savedSessions.filter(item => item.id !== session.id);
+                    this.saveSessions();
+                    if (this.selectedSession && this.selectedSession.id === session.id) this.selectedSession = null;
+                },
+                backToList() {
+                    this.selectedSession = null;
                 }
+            },
+            mounted() {
+                this.loadSessions();
             }
         }).mount('#app');
     </script>
