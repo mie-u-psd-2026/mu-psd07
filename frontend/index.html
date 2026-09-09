@@ -44,6 +44,7 @@
         .primary:hover:not(:disabled) { background: #056389; }
         .secondary { background: white; border: 1px solid #a9cddd; color: var(--accent); }
         .actions { display: flex; justify-content: flex-end; align-items: center; gap: 16px; margin-top: 20px; }
+.actions-spacer { flex: 1; }
         .topic { padding: 18px 22px; background: #e1f3fc; border-radius: 12px; margin: 0 0 24px; white-space: pre-wrap; overflow-wrap: anywhere; }
         .topic small { display: block; color: var(--muted); margin-bottom: 4px; }
         .question-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
@@ -239,6 +240,8 @@
                         <div class="actions"><button type="submit" class="primary" :disabled="loading">{{ question.answer_type === 'number' ? '決定' : '送信' }}</button></div>
                     </form>
                     <div class="actions" v-if="stage === 'question'">
+                        <button type="button" class="secondary" :disabled="loading" @click="skipQuestion">質問がおかしい・スキップ</button>
+                        <span class="actions-spacer" aria-hidden="true"></span>
                         <button type="button" class="secondary" :disabled="loading" @click="finishEarly">ここで結論を出す</button>
                     </div>
                 </section>
@@ -346,6 +349,11 @@ examples: [
                     this.pending = { consultation: this.consultation, history: [...this.history, item], answer };
                     return this.sendRequest();
                 },
+                skipQuestion() {
+                    if (this.loading || !this.question) return;
+                    this.pending = { consultation: this.consultation, history: [...this.history], answer: null, skipQuestion: this.question.question };
+                    return this.sendRequest();
+                },
                 finishEarly() {
                     if (this.loading || !this.question) return;
                     this.pending = { consultation: this.consultation, history: [...this.history], answer: null, forceResult: true };
@@ -362,6 +370,7 @@ examples: [
                     if (data?.status === 'question' && nonempty(data.question)) {
                         if (!['choice', 'number', 'text'].includes(data.answer_type)) throw new Error('AIの回答形式が不正です。再試行してください。');
                         if (data.answer_type === 'choice' && (!list(data.options) || data.options.length < 2 || data.options.length > 5 || new Set(data.options).size !== data.options.length)) throw new Error('AIの選択肢が不正です。再試行してください。');
+                        if (data.answer_type === 'choice' && data.options.some(o => /\?|？/.test(o) || o.length > 24)) throw new Error('AIの選択肢が質問文になっています。再試行してください。');
                         if (data.answer_type === 'number' && typeof data.unit !== 'string') throw new Error('数値の単位を取得できませんでした。再試行してください。');
                         const q = String(data.question).replace(/[\s、。・?？]/g, '');
                         if (q.length <= 3 || /^(わから|分から|決められ|まだわから|どちらとも|その他|はい|いいえ|未定)/.test(q)) throw new Error('AIの質問文が不適切でした。再試行してください。');
@@ -382,7 +391,8 @@ examples: [
                             method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
                             body: JSON.stringify({
                                 consultation: submitted.consultation, history: submitted.history,
-                                ...(submitted.forceResult ? { force_result: true } : {})
+                                ...(submitted.forceResult ? { force_result: true } : {}),
+                                ...(submitted.skipQuestion ? { skip_question: submitted.skipQuestion } : {})
                             })
                         });
                         const payload = await response.json();

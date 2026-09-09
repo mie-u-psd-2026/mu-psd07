@@ -62,6 +62,48 @@ SYSTEM_PROMPT = (BACKEND_DIR / 'prompt.txt').read_text(encoding='utf-8')
 OLLAMA_MODEL = os.environ.get('OLLAMA_MODEL', 'gemma3:4b')
 MAX_QUESTIONS = 15
 MIN_QUESTIONS_FOR_RESULT = 3
+SKIP_LOG_PATH = BACKEND_DIR / 'skip_log.json'
+
+
+def load_skipped_questions():
+    try:
+        data = json.loads(SKIP_LOG_PATH.read_text(encoding='utf-8'))
+        if isinstance(data, list):
+            return [str(item).strip() for item in data if str(item).strip()]
+    except (OSError, ValueError):
+        pass
+    return []
+
+
+def save_skipped_questions(items):
+    try:
+        SKIP_LOG_PATH.write_text(json.dumps(items, ensure_ascii=False), encoding='utf-8')
+    except OSError:
+        pass
+
+
+def learn_skipped_question(question):
+    items = load_skipped_questions()
+    if question not in items:
+        items.append(question)
+        save_skipped_questions(items)
+
+
+def is_learned_skip_question(question):
+    skipped = load_skipped_questions()
+    if not skipped:
+        return False
+    candidate = normalize_text(question)
+    if not candidate:
+        return False
+    for item in skipped:
+        prev = normalize_text(item)
+        if prev and (candidate == prev or candidate in prev or prev in candidate
+                     or SequenceMatcher(None, candidate, prev).ratio() >= 0.7):
+            return True
+        if prev and has_money_marker(question) and has_money_marker(item):
+            return True
+    return False
 
 
 client = OpenAI(
@@ -183,6 +225,22 @@ def has_unrelated_choice(question, options):
     )
 
 
+def has_question_options(question, options):
+    if not options:
+        return False
+    for option in options:
+        text = unicodedata.normalize('NFKC', option).strip()
+        if not text:
+            continue
+        if '？' in text or '?' in text:
+            return True
+        if re.search(r'ますか|ですか|でしょうか|か？', text):
+            return True
+        if len(normalize_text(text)) > 24:
+            return True
+    return False
+
+
 def asks_direct_choice(question, consultation):
     raw = unicodedata.normalize('NFKC', question).casefold()
     if not re.search(r'どちら|どっち', raw):
@@ -284,6 +342,8 @@ def is_repeated_question(question, history):
     for item in history:
         prev = normalize_text(item['question'])
         if candidate == prev or SequenceMatcher(None, candidate, prev).ratio() >= 0.8:
+            return True
+        if has_money_marker(question) and has_money_marker(item['question']):
             return True
         if (has_time_topic(question) and has_time_topic(item['question'])
                 and not has_money_marker(question) and not has_money_marker(item['question'])
@@ -423,6 +483,9 @@ def send_api():
     consultation = data.get('consultation')
     history = data.get('history', [])
     force_result = bool(data.get('force_result'))
+    skipped_question = data.get('skip_question')
+    if skipped_question is not None and not isinstance(skipped_question, str):
+        return jsonify(error='スキップ対象の質問が不正です。'), 400
     if not isinstance(consultation, str) or not consultation.strip():
         return jsonify(error='相談内容を入力してください。'), 400
     if not isinstance(history, list) or len(history) > MAX_QUESTIONS or any(
@@ -436,6 +499,16 @@ def send_api():
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": consultation.strip()},
     ]
+    if skipped_question is not None:
+        learn_skipped_question(skipped_question.strip())
+    learned = load_skipped_questions()
+    if learned:
+        messages[0]['content'] += (
+            '\n\n以下はユーザーが「質問や選択肢がおかしい」としてスキップした質問です。'
+            'これらと同じ内容の質問を作らないでください。同じ判断条件を聞く場合でも、'
+            '必ず違う言い方をして、スキップされた質問の文面・選択肢を再利用しないでください。\n'
+            + json.dumps(learned, ensure_ascii=False)
+        )
     for item in history:
         messages.append({"role": "assistant", "content": item['question']})
         messages.append({"role": "user", "content": item['answer']})
@@ -482,8 +555,8 @@ def send_api():
             ):
                 messages[0]['content'] += '\n直前の生成候補「' + result['question'] + '」（condition: ' + (result.get('condition') or 'なし') + '）は回答済みの同じ判断条件の繰り返しなので却下しました。この質問の言い換えも禁止です。別の判断条件を質問してください。'
                 continue
-            if result['status'] == 'question' and (is_filler_question(result['question']) or reuses_last_answer(result['question'], history) or is_malformed_question(result['question']) or asks_direct_choice(result['question'], consultation) or asks_user_to_decide(result['question'], consultation) or has_unrelated_choice(result['question'], result.get('options', [])) or question_restates_consultation(result['question'], consultation) or asks_comparison_result(result['question'], consultation) or presumes_single_candidate(result['question'], consultation)):
-                messages[0]['content'] += '\n直前の生成候補の質問文「' + result['question'] + '」は定型句、直前の回答の使い回し、選択肢の埋め込み、相談の結論をそのまま聞き返す直接比較、ユーザーに結論を直接選ばせる質問、片方の候補だけを前提にした質問、場所などの質問トピックと無関係な語句を含む選択肢、または相談内容の引き写し・前置き（「〜とのことですが」など）だったため却下しました。質問トピックに直結する自然な選択肢、または判断材料となる具体的な条件（時間・予算・疲れ具合・同行者など）を1つだけ、前置きなしで質問してください。'
+            if result['status'] == 'question' and (is_filler_question(result['question']) or reuses_last_answer(result['question'], history) or is_malformed_question(result['question']) or asks_direct_choice(result['question'], consultation) or asks_user_to_decide(result['question'], consultation) or has_unrelated_choice(result['question'], result.get('options', [])) or has_question_options(result['question'], result.get('options', [])) or question_restates_consultation(result['question'], consultation) or asks_comparison_result(result['question'], consultation) or presumes_single_candidate(result['question'], consultation) or is_learned_skip_question(result['question'])):
+                messages[0]['content'] += '\n直前の生成候補の質問文「' + result['question'] + '」は定型句、直前の回答の使い回し、選択肢の埋め込み、相談の結論をそのまま聞き返す直接比較、ユーザーに結論を直接選ばせる質問、片方の候補だけを前提にした質問、場所などの質問トピックと無関係な語句を含む選択肢、選択肢が質問文になっている・長すぎる、「〜とのことですが」などの相談内容の引き写しの前置きだったため却下しました。質問トピックに直結する短い語句（例:「毎日」「週に数回」）の選択肢、または判断材料となる具体的な条件（時間・予算・疲れ具合・同行者など）を1つだけ、前置きなしで質問してください。'
                 continue
             if result['status'] == 'question' and result['answer_type'] == 'text':
                 unit = numeric_unit_for(result['question'])
@@ -513,7 +586,10 @@ def send_api():
             if result['status'] == 'result' and len(history) < MIN_QUESTIONS_FOR_RESULT and not force_result:
                 asked = {normalize_text(item['question']) for item in history}
                 fallback = next(
-                    (q for q in FALLBACK_QUESTIONS if normalize_text(q['question']) not in asked),
+                    (q for q in FALLBACK_QUESTIONS
+                     if normalize_text(q['question']) not in asked
+                     and not is_learned_skip_question(q['question'])
+                     and not any(has_money_marker(q['question']) and has_money_marker(item['question']) for item in history)),
                     FALLBACK_QUESTIONS[0],
                 )
                 return jsonify(fallback)

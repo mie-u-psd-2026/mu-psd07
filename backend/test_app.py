@@ -11,7 +11,9 @@ from backend.app import (app, client, OLLAMA_MODEL, SYSTEM_PROMPT, MAX_QUESTIONS
                          clean_conditional_recommendation, numeric_unit_for,
                          has_unrelated_choice, is_repeated_question, has_time_topic, condition_repeated,
                          question_restates_consultation, result_gate_issue, result_contradicts_history,
-                         result_reason_is_grounded, result_addresses_all_candidates)
+                         result_reason_is_grounded, result_addresses_all_candidates,
+                         load_skipped_questions, save_skipped_questions, learn_skipped_question,
+                         is_learned_skip_question, SKIP_LOG_PATH, has_question_options)
 
 
 class AppTests(unittest.TestCase):
@@ -202,6 +204,28 @@ class AppTests(unittest.TestCase):
             '通勤時間はどのくらいですか？',
             [{'question': '移動費の予算はいくらですか？', 'answer': '1万円'}],
         ))
+
+    def test_money_topic_question_is_repeated_with_paraphrase(self):
+        cost = '年間で、犬や猫にかかる費用としてどのくらいまでなら出せるでしょうか？'
+        budget = '予算はいくらまで使えますか？'
+        self.assertTrue(is_repeated_question(budget, [{'question': cost, 'answer': '50000円'}]))
+        self.assertTrue(is_repeated_question(cost, [{'question': budget, 'answer': '50000円'}]))
+
+    def test_money_topic_repeat_is_rejected_and_retried(self):
+        cost_q = '年間で、犬や猫にかかる費用としてどのくらいまでなら出せるでしょうか？'
+        budget_q = {**self.question, 'question': '予算はいくらまで使えますか？', 'answer_type': 'number', 'unit': '円'}
+        good = {**self.question, 'question': 'ペットと過ごす時間は1日どのくらいありますか？',
+                'answer_type': 'number', 'unit': '時間'}
+        history = [{'question': cost_q, 'answer': '50000円', 'condition': '費用'}]
+        with patch.object(client.chat.completions, 'create', side_effect=[
+            self.completion(json.dumps(budget_q)), self.completion(json.dumps(good))
+        ]) as create:
+            response = self.http.post('/send_api', json={'consultation': '一人暮らしで犬を飼うか猫を飼うか迷っています',
+                                                         'history': history})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()['question'], good['question'])
+        self.assertEqual(create.call_count, 2)
+        self.assertIn('却下しました', create.call_args_list[1].kwargs['messages'][0]['content'])
 
     def test_time_topic_duplicate_is_rejected_and_retried(self):
         q5 = '移動に使える時間、1日にどれくらい確保できますか？'
@@ -672,6 +696,84 @@ class AppTests(unittest.TestCase):
         with patch.object(client.chat.completions, 'create', return_value=self.completion(json.dumps(self.question))):
             response = self.http.post('/send_api', json={'consultation': 'PC', 'history': history, 'force_result': True})
         self.assertEqual(response.status_code, 502)
+
+    def test_skip_log_roundtrip(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / 'skip_log.json'
+            with patch('backend.app.SKIP_LOG_PATH', log):
+                self.assertEqual(load_skipped_questions(), [])
+                learn_skipped_question('犬を飼う場合、ペットフードの費用はいくらですか？')
+                learn_skipped_question('犬を飼う場合、ペットフードの費用はいくらですか？')
+                self.assertEqual(load_skipped_questions(), ['犬を飼う場合、ペットフードの費用はいくらですか？'])
+                save_skipped_questions([])
+                self.assertEqual(load_skipped_questions(), [])
+
+    def test_is_learned_skip_question(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / 'skip_log.json'
+            with patch('backend.app.SKIP_LOG_PATH', log):
+                save_skipped_questions(['犬を飼う場合、ペットフードの費用はいくらですか？'])
+                self.assertTrue(is_learned_skip_question('犬を飼う場合、ペットフードの費用はいくらですか？'))
+                self.assertTrue(is_learned_skip_question('犬を飼う場合は、ペットフードにいくら使えますか？'))
+                self.assertTrue(is_learned_skip_question('予算はいくらまで使えますか？'))
+                self.assertFalse(is_learned_skip_question('ペットと過ごせる時間はどのくらいですか？'))
+
+    def test_skip_question_is_passed_to_model_and_returns_next_question(self):
+        bad = {**self.question, 'question': '犬を飼う場合、1ヶ月あたりのペットフードの費用はいくらまで使えますか？',
+               'answer_type': 'number', 'unit': '円'}
+        good = {**self.question, 'question': 'ペットと過ごせる時間は1日どのくらいありますか？',
+                'answer_type': 'number', 'unit': '時間'}
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / 'skip_log.json'
+            with patch('backend.app.SKIP_LOG_PATH', log):
+                with patch.object(client.chat.completions, 'create', side_effect=[
+                    self.completion(json.dumps(bad)), self.completion(json.dumps(good))
+                ]) as create:
+                    response = self.http.post('/send_api', json={
+                        'consultation': '一人暮らしで犬を飼うか猫を飼うか迷っています',
+                        'history': [],
+                        'skip_question': bad['question'],
+                    })
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.get_json()['question'], good['question'])
+                self.assertEqual(create.call_count, 2)
+                self.assertIn(bad['question'], create.call_args_list[1].kwargs['messages'][0]['content'])
+                self.assertIn('スキップ', create.call_args_list[1].kwargs['messages'][0]['content'])
+
+    def test_skip_question_bad_type_returns_400(self):
+        with patch.object(client.chat.completions, 'create') as create:
+            response = self.http.post('/send_api', json={'consultation': '犬か猫', 'skip_question': 123})
+        self.assertEqual(response.status_code, 400)
+        create.assert_not_called()
+
+    def test_has_question_options_helper(self):
+        self.assertTrue(has_question_options('生活環境について', ['マンションやアパートの一室など、狭いスペースですか？', '戸建てですか？']))
+        self.assertTrue(has_question_options('生活環境について', ['ベランダや庭など、犬を飼うためのスペースはありますか？']))
+        self.assertTrue(has_question_options('生活環境について', ['1日どれくらいの時間、家を外出しますか？', 'ほとんど家にいる']))
+        self.assertFalse(has_question_options('生活環境について', ['マンションやアパートの一室', '戸建て']))
+        self.assertFalse(has_question_options('生活環境について', ['毎日', '週に数回', 'ほぼ外出しない']))
+        self.assertFalse(has_question_options('生活環境について', ['5万円まで', 'それ以上使える']))
+
+    def test_question_options_question_is_rejected_and_retried(self):
+        bad = {**self.question, 'question': '現在の生活環境について教えていただけますか？',
+               'options': ['マンションやアパートの一室など、狭いスペースですか？', '戸建てや庭があり、広いスペースですか？', 'どちらでもありません']}
+        good = {**self.question, 'question': '住んでいる住まいはどのような環境ですか？',
+                'options': ['マンションやアパートの一室', '戸建て']}
+        with patch.object(client.chat.completions, 'create', side_effect=[
+            self.completion(json.dumps(bad)), self.completion(json.dumps(good))
+        ]) as create:
+            response = self.http.post('/send_api', json={'consultation': '一人暮らしで犬を飼うか猫を飼うか迷っています',
+                                                         'history': []})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()['question'], good['question'])
+        self.assertEqual(create.call_count, 2)
+        self.assertIn('選択肢', create.call_args_list[1].kwargs['messages'][0]['content'])
 
 
 if __name__ == '__main__':
