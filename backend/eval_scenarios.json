@@ -1,0 +1,51 @@
+[
+  {
+    "id": "language_lessons",
+    "split": "heldout",
+    "consultation": "英会話をオンラインで習うか教室に通うか迷っています。",
+    "profile": "仕事の終わる時刻が毎日違う。平日の夜に20分程度、自宅で学びたい。自宅は静かでネット回線がある。目的は旅行での簡単な会話。月6000円まで。人と話すことへの抵抗は少ない。",
+    "answer_mode": "profile"
+  },
+  {
+    "id": "notes_unknown",
+    "split": "heldout",
+    "consultation": "読書の記録を紙のノートにするかスマホにするか迷っています。",
+    "profile": "自分の好みや使い方をまだ決めていない。",
+    "answer_mode": "unknown"
+  },
+  {
+    "id": "laundry",
+    "split": "heldout",
+    "consultation": "洗濯物を乾かすために衣類乾燥機を買うか、浴室乾燥を使い続けるか迷っています。",
+    "profile": "浴室乾燥は設置済み。家族4人分を毎日洗う。夜に洗濯し朝までに乾かしたい。機械を置ける場所は狭い。設置工事はできない。予算は6万円まで。",
+    "answer_mode": "profile"
+  },
+  {
+    "id": "hobby_space",
+    "split": "heldout",
+    "consultation": "趣味の作業場所を自宅に作るか、共同の作業スペースを借りるか迷っています。",
+    "profile": "小さな木工雑貨を週末の昼に作る。集合住宅なので大きな音は出せない。自宅に専用の部屋はない。月8000円まで使える。共同スペースまでは徒歩10分。道具はまだ持っていない。",
+    "answer_mode": "profile"
+  },
+  {
+    "id": "three_candidates",
+    "split": "heldout",
+    "consultation": "休日の運動を水泳、自転車、ヨガのどれにするか迷っています。",
+    "profile": "屋内で、天候に左右されず一人で続けたい。週1回1時間、月5000円まで。自転車は持っていない。プールまで徒歩10分、ヨガ教室は電車で40分。水に入るのは好き。",
+    "answer_mode": "profile"
+  },
+  {
+    "id": "pc_regression",
+    "split": "regression",
+    "consultation": "大学用のPCをノートPCかデスクトップPCで迷っています。",
+    "profile": "大学へ毎日持ち運ぶ。授業でプログラミングとレポートに使う。予算は10万円。ゲームはしない。専門スペックは分からない。",
+    "answer_mode": "profile"
+  },
+  {
+    "id": "trip_regression",
+    "split": "regression",
+    "consultation": "温泉旅行にするか街歩きにするか迷っています。",
+    "profile": "2〜3日、家族と出かける。予算は5万円。かなり疲れていて休みたい。移動は電車で片道2時間まで。",
+    "answer_mode": "profile"
+  }
+]

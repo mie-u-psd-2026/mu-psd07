@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#087ca8">
     <title>AI意思決定サポーター</title>
+    <script src="/runtime-config.js"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <style>
         :root { color-scheme: light; --ink: #203e50; --muted: #536f80; --accent: #087ca8; --line: #cce5f1; }
@@ -239,6 +240,7 @@
                         <template v-else><label for="textAnswer">{{ showOther ? 'その他の回答を入力してください' : 'あなたの回答' }}</label><textarea id="textAnswer" ref="textAnswer" v-model="answerInput" :disabled="loading" rows="3"></textarea></template>
                         <div class="actions"><button type="submit" class="primary" :disabled="loading">{{ question.answer_type === 'number' ? '決定' : '送信' }}</button></div>
                     </form>
+                    <button v-if="question.answer_type !== 'choice'" type="button" class="secondary" :disabled="loading" @click="submitAnswer('わからない・決められない')">わからない・決められない</button>
                     <div class="actions" v-if="stage === 'question'">
                         <button type="button" class="secondary" :disabled="loading" @click="skipQuestion">質問がおかしい・スキップ</button>
                         <span class="actions-spacer" aria-hidden="true"></span>
@@ -268,7 +270,7 @@
                 <div class="gauge-row"><span class="muted">結論を出せる確信度</span><strong>{{ confidence }}%</strong></div>
                 <div class="gauge-track" role="progressbar" :aria-valuenow="confidence" aria-valuemin="0" aria-valuemax="100" aria-label="確信度"><div class="gauge-fill" :style="{ width: Math.min(confidence, 100) + '%' }"></div></div>
             </div>
-            <div v-if="loading" class="loading" role="status"><span class="spinner" aria-hidden="true"></span>{{ pending && pending.forceResult ? 'AIがおすすめをまとめています…' : 'AIが次の質問を考えています…' }}</div>
+            <div v-if="loading" class="loading" role="status"><span class="spinner" aria-hidden="true"></span>{{ pending && pending.forceResult ? 'AIがおすすめをまとめています…' : 'AIが判断条件と質問を確認しています…' }}</div>
             <div v-if="error" class="error" role="alert"><p>{{ error }}</p><button v-if="pending" class="secondary" type="button" :disabled="loading" @click="sendRequest">同じ内容で再試行</button></div>
             <p v-if="pending && pending.answer !== null" class="muted">送信した回答：{{ pending.answer }}</p>
         </main>
@@ -280,11 +282,11 @@
                 return {
                     stage: 'start', consultation: '', question: null, result: null, history: [],
                     answerInput: '', selectedOption: '', showOther: false, loading: false, error: '', pending: null, historyOpen: false, confidence: 0,
-                    savedSessions: [], selectedSession: null,
+                    savedSessions: [], selectedSession: null, skippedQuestions: [],
 examples: [
-                        { label: '運動習慣', text: 'ダイエットのためにジムに通うか、自宅で筋トレを始めるか迷っています。' },
-                        { label: 'ペット', text: '一人暮らしで犬を飼うか猫を飼うか迷っています。' },
-                        { label: '引っ越し', text: '今の部屋を更新するか、家賃の安い部屋へ引っ越すか迷っています。' }
+                        { label: 'PC選び', text: '大学用のPCをノートPCにするかデスクトップPCにするか迷っています。' },
+                        { label: '車の利用', text: '車を買うかカーシェアを利用するか迷っています。' },
+                        { label: 'ジム', text: 'ダイエットのためにジムに通うか、自宅で筋トレを始めるか迷っています。' }
                     ]
                 };
             },
@@ -372,9 +374,8 @@ examples: [
                         if (data.answer_type === 'choice' && (!list(data.options) || data.options.length < 2 || data.options.length > 5 || new Set(data.options).size !== data.options.length)) throw new Error('AIの選択肢が不正です。再試行してください。');
                         if (data.answer_type === 'choice' && data.options.some(o => /\?|？/.test(o) || o.length > 24)) throw new Error('AIの選択肢が質問文になっています。再試行してください。');
                         if (data.answer_type === 'number' && typeof data.unit !== 'string') throw new Error('数値の単位を取得できませんでした。再試行してください。');
-                        const q = String(data.question).replace(/[\s、。・?？]/g, '');
-                        if (q.length <= 3 || /^(わから|分から|決められ|まだわから|どちらとも|その他|はい|いいえ|未定)/.test(q)) throw new Error('AIの質問文が不適切でした。再試行してください。');
-                        if (/選択肢/.test(q) || /\d[\.．、)）]/.test(q)) throw new Error('AIの質問文に選択肢が埋め込まれていました。再試行してください。');
+                        // 意味の審査はサーバーで行う。小数や自然な語句まで禁止しない。
+                        if (data.question.trim().length < 4 || data.question.length > 100 || /[\r\n]/.test(data.question)) throw new Error('AIの質問文の形式が不正です。再試行してください。');
                         return data;
                     }
                     if (data?.status === 'result' && ['recommendation', 'reason', 'alternative'].every(key => nonempty(data[key])) && ['conditions', 'pros', 'cons'].every(key => list(data[key]))) return data;
@@ -385,13 +386,15 @@ examples: [
                     this.loading = true; this.error = '';
                     const submitted = this.pending;
                     const controller = new AbortController();
-                    const timeout = setTimeout(() => controller.abort(), 120000);
+                    const timeoutMs = Number.isFinite(globalThis.APP_REQUEST_TIMEOUT_MS) ? globalThis.APP_REQUEST_TIMEOUT_MS : 190000;
+                    const timeout = setTimeout(() => controller.abort(), timeoutMs);
                     try {
                         const response = await fetch('/send_api', {
                             method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
                             body: JSON.stringify({
                                 consultation: submitted.consultation, history: submitted.history,
                                 ...(submitted.forceResult ? { force_result: true } : {}),
+                                skipped_questions: this.skippedQuestions,
                                 ...(submitted.skipQuestion ? { skip_question: submitted.skipQuestion } : {})
                             })
                         });
@@ -402,7 +405,8 @@ examples: [
                         this.consultation = submitted.consultation; this.history = submitted.history; this.stage = data.status;
                         this.question = data.status === 'question' ? data : null;
                         this.result = data.status === 'result' ? data : null;
-                        this.confidence = data.status === 'result' ? 100 : (Number.isFinite(data.confidence) ? data.confidence : 0);
+                        this.confidence = Number.isFinite(data.confidence) ? Math.max(0, Math.min(100, data.confidence)) : 0;
+                        if (submitted.skipQuestion && !this.skippedQuestions.includes(submitted.skipQuestion)) this.skippedQuestions.push(submitted.skipQuestion);
                         this.answerInput = ''; this.selectedOption = ''; this.showOther = false; this.pending = null;
                         if (data.status === 'result') this.saveSession();
                         this.$nextTick(() => (this.$refs.questionHeading || this.$refs.resultHeading)?.focus());
@@ -416,7 +420,7 @@ examples: [
                     if (this.loading) return;
                     this.stage = 'start'; this.consultation = ''; this.question = null; this.result = null;
                     this.history = []; this.answerInput = ''; this.selectedOption = ''; this.showOther = false;
-                    this.error = ''; this.pending = null; this.confidence = 0; this.selectedSession = null;
+                    this.error = ''; this.pending = null; this.confidence = 0; this.selectedSession = null; this.skippedQuestions = [];
                     this.$nextTick(() => this.$refs.consultationInput?.focus());
                 },
                 saveSession() {
