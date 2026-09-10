@@ -91,6 +91,41 @@ class DecisionTests(unittest.TestCase):
         return decide(self.client, 'test-model', self.consultation, kwargs.pop('history', []),
                       strict_review=kwargs.pop('strict_review', True), **kwargs)
 
+    def test_example_reference_returns_public_choices_without_generation(self):
+        self.consultation = '犬か猫を飼いたい'
+        value = {'plan': {'candidates': ['犬', '猫'], 'purpose': '飼える住居か確認する',
+                         'ready': False, 'next_condition': '住居の飼育制約'},
+                 'response': {'status': 'example', 'example_id': 0, 'confidence': 20}}
+        self.outputs(value)
+        response = self.run_decision(strict_review=False)
+        self.assertEqual(response['answer_type'], 'choice')
+        self.assertEqual(response['question'], '今の住まいでは、犬や猫を飼えますか？')
+        self.assertEqual(len(response['options']), 5)
+        self.assertNotIn('example_id', response)
+        self.assertEqual(self.client.chat.completions.create.call_count, 1)
+
+    def test_reference_cannot_select_skipped_or_answered_example(self):
+        self.consultation = '犬か猫を飼いたい'
+        value = {'plan': {'candidates': ['犬', '猫'], 'purpose': '世話の時間を確認する',
+                         'ready': False, 'next_condition': '世話に使える時間'},
+                 'response': {'status': 'example', 'example_id': 0, 'confidence': 30}}
+        self.outputs(value)
+        response = self.run_decision(strict_review=False,
+            history=[{'question': '留守は？', 'answer': '不明', 'condition': '留守の時間'}],
+            skipped=['今の住まいでは、犬や猫を飼えますか？'])
+        self.assertEqual(response['condition'], '世話に使える時間')
+
+    def test_reference_condition_mismatch_is_retried(self):
+        self.consultation = '犬か猫を飼いたい'
+        value = {'plan': {'candidates': ['犬', '猫'], 'purpose': '留守時間を確認する',
+                         'ready': False, 'next_condition': '留守の時間'},
+                 'response': {'status': 'example', 'example_id': 0, 'confidence': 30}}
+        corrected = {**value, 'response': {**value['response'], 'example_id': 1}}
+        self.outputs(value, corrected)
+        response = self.run_decision(strict_review=False)
+        self.assertEqual(response['condition'], '留守の時間')
+        self.assertEqual(self.client.chat.completions.create.call_count, 2)
+
     def test_planning_generation_review_are_separate_and_internal(self):
         self.outputs(plan(), draft(), review())
         response = self.run_decision()

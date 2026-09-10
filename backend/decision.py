@@ -143,8 +143,24 @@ class PracticalTurn(StrictModel):
     response: ChoiceQuestion | DecisionResult
 
 
+class PracticalResultPlan(PracticalPlan):
+    ready: Literal[True]
+    next_condition: Literal['']
+
+
 class PracticalResultTurn(PracticalTurn):
+    plan: PracticalResultPlan
     response: DecisionResult
+
+
+class ExampleQuestion(StrictModel):
+    status: Literal['example']
+    example_id: int = Field(ge=0, le=1)
+    confidence: int = Field(ge=0, le=99)
+
+
+class PracticalExampleTurn(PracticalTurn):
+    response: ExampleQuestion | ChoiceQuestion | DecisionResult
 
 
 class ReviewBase(StrictModel):
@@ -266,14 +282,14 @@ def materialize_plan(draft, consultation, history):
         next_condition='' if draft.ready else max(unasked, key=lambda c: c.priority).id)
 
 
-def structured_call(client, model, schema, system, payload, deadline, max_tokens=2200):
+def structured_call(client, model, schema, system, payload, deadline, max_tokens=2200, compact=False):
     remaining = deadline - monotonic()
     if remaining <= 0:
         raise TimeoutError('相談の処理時間を超過しました')
     completion = client.chat.completions.create(
         model=model, temperature=0.7, timeout=remaining, max_tokens=max_tokens,
-        messages=[{'role': 'system', 'content': system + '\nKeep reasoning brief: at most 200 words. Do not restate the input or schema.\n出力スキーマ:\n' + json.dumps(schema.model_json_schema(), ensure_ascii=False)},
-                  {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)}],
+        messages=[{'role': 'system', 'content': system if compact else system + '\nKeep reasoning brief: at most 200 words. Do not restate the input or schema.\n出力スキーマ:\n' + json.dumps(schema.model_json_schema(), ensure_ascii=False)},
+                  {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}],
         response_format={'type': 'json_schema', 'json_schema': {
             'name': schema.__name__, 'schema': schema.model_json_schema(),
         }},
@@ -344,17 +360,31 @@ def practical_decide(client, model, consultation, history, force_result, skipped
                    consultation, '', [*(h['question'] for h in history), *(skipped or [])],
                    [h.get('condition', '') for h in history])}
     corrections = []
+    examples = payload['question_examples']
+    if force_result:
+        examples = payload['question_examples'] = []
+    schema = PracticalResultTurn if force_result else (PracticalExampleTurn if examples else PracticalTurn)
     for attempt in range(2):
         record = {'attempt': attempt + 1, 'unknown_stop': unknown_stop, 'strict_review': False}
         if trace is not None:
             trace.append(record)
         start = monotonic()
         try:
-            generated = structured_call(client, model, PracticalResultTurn if force_result else PracticalTurn,
-                prompt, {**payload, 'corrections': corrections}, deadline, max_tokens=1200)
+            generated = structured_call(client, model, schema,
+                prompt, {**payload, 'corrections': corrections}, deadline, max_tokens=800, compact=True)
             record['model_seconds'] = round(monotonic() - start, 3)
             record['draft'] = generated.model_dump()
             response = generated.response
+            if isinstance(response, ExampleQuestion):
+                if response.example_id >= len(examples):
+                    raise DecisionQualityError('存在するquestion_examplesの番号を選んでください')
+                example = examples[response.example_id]
+                if normalized(generated.plan.next_condition) != normalized(example['condition']):
+                    raise DecisionQualityError('選ぶ例のconditionをplan.next_conditionに指定してください')
+                response = ChoiceQuestion(status='question', answer_type='choice',
+                    question=example['question'], options=example['options'],
+                    condition=example['condition'], confidence=response.confidence)
+                record['question_source'] = 'example'
             if generated.plan.ready != (response.status == 'result'):
                 raise DecisionQualityError('plan.readyと質問・結論の形式を一致させてください')
             pending = [] if generated.plan.ready else [PendingCondition(
