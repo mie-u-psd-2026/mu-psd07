@@ -271,7 +271,7 @@
                 <div class="gauge-row"><span class="muted">結論を出せる確信度</span><strong>{{ confidence }}%</strong></div>
                 <div class="gauge-track" role="progressbar" :aria-valuenow="confidence" aria-valuemin="0" aria-valuemax="100" aria-label="確信度"><div class="gauge-fill" :style="{ width: Math.min(confidence, 100) + '%' }"></div></div>
             </div>
-            <div v-if="loading" class="loading" role="status"><span class="spinner" aria-hidden="true"></span>{{ pending && pending.forceResult ? 'AIがおすすめをまとめています…' : 'AIが判断条件と質問を確認しています…' }}</div>
+            <div v-if="loading" class="loading" role="status"><span class="spinner" aria-hidden="true"></span><span>{{ pending && pending.forceResult ? 'AIがおすすめをまとめています…' : 'AIが判断条件と質問を確認しています…' }}<small class="loading-note">PCのスペック（CPU・GPU・搭載メモリ）が低い場合、30秒から数分かかる場合があります。</small></span></div>
             <div v-if="error" class="error" role="alert"><p>{{ error }}</p><button v-if="pending" class="secondary" type="button" :disabled="loading" @click="sendRequest">同じ内容で再試行</button></div>
             <p v-if="pending && pending.answer !== null" class="muted">送信した回答：{{ pending.answer }}</p>
         </main>
@@ -382,7 +382,7 @@ examples: [
                     if (data?.status === 'result' && ['recommendation', 'reason', 'alternative'].every(key => nonempty(data[key])) && ['conditions', 'pros', 'cons'].every(key => list(data[key]))) return data;
                     throw new Error('AIから必要な情報を取得できませんでした。再試行してください。');
                 },
-                async sendRequest() {
+async sendRequest() {
                     if (this.loading || !this.pending) return;
                     this.loading = true; this.error = '';
                     const submitted = this.pending;
