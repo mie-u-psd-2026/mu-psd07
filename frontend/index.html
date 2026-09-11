@@ -236,7 +236,7 @@
                     <form v-if="question.answer_type !== 'choice' || showOther" class="answer-form" @submit.prevent="submitInput">
                         <template v-if="question.answer_type === 'number'">
                             <label for="numberAnswer">数値を入力してください</label>
-                            <div class="number-row"><input id="numberAnswer" v-model="answerInput" type="number" step="any" :disabled="loading" aria-describedby="answerUnit"><span id="answerUnit">{{ question.unit }}</span></div>
+                            <div class="number-row"><input id="numberAnswer" v-model="answerInput" type="number" step="any" min="0" :disabled="loading" aria-describedby="answerUnit"><span id="answerUnit">{{ question.unit }}</span></div>
                         </template>
                         <template v-else><label for="textAnswer">{{ showOther ? 'その他の回答を入力してください' : 'あなたの回答' }}</label><textarea id="textAnswer" ref="textAnswer" v-model="answerInput" :disabled="loading" rows="3"></textarea></template>
                         <div class="actions"><button type="submit" class="primary" :disabled="loading">{{ question.answer_type === 'number' ? '決定' : '送信' }}</button></div>
@@ -339,22 +339,17 @@ examples: [
                     if (this.loading || !this.question) return;
                     const value = String(this.answerInput).trim();
                     if (!value) { this.error = '回答を入力してください。'; return; }
-                    if (this.question.answer_type === 'number' && !Number.isFinite(Number(value))) {
-                        this.error = '有効な数値を入力してください。'; return;
+                    if (this.question.answer_type === 'number') {
+                        const numeric = Number(value);
+                        if (!Number.isFinite(numeric)) { this.error = '有効な数値を入力してください。'; return; }
+                        if (numeric < 0) { this.error = '0以上の数値を入力してください。'; return; }
                     }
                     return this.submitAnswer(this.question.answer_type === 'number' ? `${value}${this.question.unit || ''}` : value);
                 },
                 submitAnswer(answer) {
                     if (this.loading || !this.question) return;
                     // Commit history only after success so retries never duplicate answers.
-                    const item = { question: this.question.question, answer };
-                    if (this.question.condition) item.condition = this.question.condition;
-                    this.pending = { consultation: this.consultation, history: [...this.history, item], answer };
-                    return this.sendRequest();
-                },
-                skipQuestion() {
-                    if (this.loading || !this.question) return;
-                    this.pending = { consultation: this.consultation, history: [...this.history], answer: null, skipQuestion: this.question.question };
+                    this.pending = { consultation: this.consultation, history: [...this.history, { question: this.question.question, answer }], answer };
                     return this.sendRequest();
                 },
                 finishEarly() {
