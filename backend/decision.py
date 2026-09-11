@@ -1,5 +1,7 @@
 """相談と回答を根拠に計画・生成・審査する。状態は毎回履歴から再構築する。"""
 import json
+import logging
+import os
 import re
 import unicodedata
 from pathlib import Path
@@ -327,9 +329,18 @@ def validate_draft(response, plan, history, skipped, draft=None):
         raise DecisionQualityError('回答済みの質問です。別の未確認条件を選んでください')
     if any(question == normalized(item) for item in skipped):
         raise DecisionQualityError('スキップされた質問の文面を再利用しないでください')
+    if (response.answer_type == 'choice' and '静音' in response.question
+            and not any(word in response.question for word in ('ファン', '動作音', '冷却'))
+            and any('pc' in normalized(c) or 'パソコン' in c for c in plan.candidates)):
+        # 意図を保ち、専門語だけの聞き方を表示前に具体化する。AIの再生成は不要。
+        response.question = 'パソコンを使うとき、ファンなどの音はどのくらい気になりますか？'
+        response.options = ['できるだけ静かな方がよい', '多少の音は気にならない', '特に気にしない']
+        if normalized(response.question) in {normalized(q) for q in [
+                *(h['question'] for h in history), *skipped]}:
+            raise DecisionQualityError('音については回答済みまたはスキップ済みです。別の条件へ進んでください')
     if response.answer_type == 'choice':
         options = [normalized(option) for option in response.options]
-        if len(set(options)) != len(options) or any(not option for option in options):
+        if len(options) < 2 or len(set(options)) != len(options) or any(not option for option in options):
             raise DecisionQualityError('選択肢は空でない異なる回答候補にしてください')
         if any(re.search(r'[?？]|ますか|ですか|でしょうか', o) or len(o) > 24 for o in response.options):
             raise DecisionQualityError('選択肢は質問文ではなく24文字以内の短い回答にしてください')
@@ -354,6 +365,8 @@ def validate_practical_question(response, plan):
 
 
 def practical_decide(client, model, consultation, history, force_result, skipped, deadline, trace, unknown_stop):
+    # 質問は軽量モデル、結論は比較・根拠の説明が安定する大きいモデルを使う。
+    result_model = os.environ.get('OLLAMA_RESULT_MODEL', 'qwen3:8b') if model == 'qwen3:4b-instruct-2507-q4_K_M' else model
     prompt = Path(__file__).with_name('practical_prompt.txt').read_text(encoding='utf-8')
     payload = {'consultation': consultation, 'history': history, 'force_result': force_result,
                'skipped_questions': skipped or [], 'question_examples': question_examples(
@@ -370,23 +383,36 @@ def practical_decide(client, model, consultation, history, force_result, skipped
             trace.append(record)
         start = monotonic()
         try:
-            generated = structured_call(client, model, schema,
+            selected_model = result_model if force_result or attempt else model
+            record['model'] = selected_model
+            generated = structured_call(client, selected_model, schema,
                 prompt, {**payload, 'corrections': corrections}, deadline, max_tokens=800, compact=True)
             record['model_seconds'] = round(monotonic() - start, 3)
             record['draft'] = generated.model_dump()
             response = generated.response
+            if response.status == 'result' and not force_result and selected_model != result_model:
+                return practical_decide(client, model, consultation, history, True, skipped,
+                                        deadline, trace, unknown_stop)
             if isinstance(response, ExampleQuestion):
                 if response.example_id >= len(examples):
                     raise DecisionQualityError('存在するquestion_examplesの番号を選んでください')
                 example = examples[response.example_id]
-                if normalized(generated.plan.next_condition) != normalized(example['condition']):
-                    raise DecisionQualityError('選ぶ例のconditionをplan.next_conditionに指定してください')
+                # 参照番号で条件が一意に決まる。モデルの重複記入の不一致で再生成しない。
+                generated.plan.next_condition = example['condition']
+                generated.plan.purpose = example['purpose']
                 response = ChoiceQuestion(status='question', answer_type='choice',
                     question=example['question'], options=example['options'],
                     condition=example['condition'], confidence=response.confidence)
                 record['question_source'] = 'example'
-            if generated.plan.ready != (response.status == 'result'):
-                raise DecisionQualityError('plan.readyと質問・結論の形式を一致させてください')
+            generated.plan.ready = response.status == 'result'
+            if isinstance(response, ChoiceQuestion):
+                response.question = ' '.join(response.question.splitlines()).strip()
+                unique = {}
+                for option in response.options:
+                    unique.setdefault(normalized(option), option)
+                response.options = list(unique.values())
+            if isinstance(response, ChoiceQuestion) and not generated.plan.next_condition:
+                generated.plan.next_condition = response.condition
             pending = [] if generated.plan.ready else [PendingCondition(
                 label=generated.plan.next_condition, impact=generated.plan.purpose, priority=5)]
             plan = materialize_plan(PlanningDraft(candidates=generated.plan.candidates, pending=pending,
@@ -403,18 +429,67 @@ def practical_decide(client, model, consultation, history, force_result, skipped
             return response.model_dump()
         except ValueError as error:
             record['error'] = str(error)
+            logging.getLogger(__name__).warning('Decision validation failed: attempt=%s type=%s',
+                                               attempt + 1, type(error).__name__)
             corrections.append(str(error)[:500])
+    fallback = pc_recovery_question(consultation, history, skipped or []) if not force_result else None
+    if fallback is None:
+        if __package__:
+            from .pc_recovery import recover
+        else:
+            from pc_recovery import recover
+        fallback = recover(consultation, history, skipped or [], force_result)
+    if fallback is not None:
+        if trace is not None:
+            trace.append({'recovery': 'pc_guided', 'status': fallback['status']})
+        return RESPONSE_ADAPTER.validate_python(fallback).model_dump()
     raise DecisionQualityError('質問を整えられませんでした。入力は保持されています。再試行してください。')
 
 
+def pc_recovery_question(consultation, history, skipped):
+    """PC形態の比較で適用範囲が明確な未回答質問へ復帰する。用途を推測しない。"""
+    text = normalized(consultation)
+    if not (any(word in text for word in ('ノートpc', 'ノートパソコン'))
+            and any(word in text for word in ('デスクトップpc', 'デスクトップパソコン'))):
+        return None
+    # 相談文に既に用途・持ち運びが書かれている可能性があれば、自動補充しない。
+    known = {
+        '主な用途': ('用途', '使', 'ゲーム', '動画', '閲覧', '文書', '仕事', '学習', '勉強', '制作', '開発', 'プログラミング'),
+        '持ち運び': ('持ち運', '持ち出', '外出', '自宅', '家で', '通学', '通勤', '毎日'),
+    }
+    for item in question_examples(consultation, '',
+            [*(h['question'] for h in history), *skipped],
+            [h.get('condition', '') for h in history]):
+        label = item['condition']
+        if label not in known or any(word in text for word in known[label]):
+            continue
+        # 古い履歴など条件名がない場合も、別文面で同じ条件を聞かない。
+        if any(any(word in normalized(h['question']) for word in known[label]) for h in history):
+            continue
+        return ChoiceQuestion(status='question', answer_type='choice', question=item['question'],
+            condition=label, options=item['options'], confidence=0).model_dump()
+    return None
+
+
 def decide(client, model, consultation, history, force_result=False, skipped=None,
-           timeout=DEFAULT_TIMEOUT, trace=None, strict_review=False):
+           timeout=DEFAULT_TIMEOUT, trace=None, strict_review=False, fast_templates=True):
     """通常は計画・生成と形式検証。別AIによる審査は厳格検証時だけ行う。"""
     deadline = monotonic() + timeout
     # 別の条件を確認する余地を残し、不明が4回続いたら暫定結論へ進む。
     unknown_stop = len(history) >= UNKNOWN_STREAK_LIMIT and all(
         is_unknown_answer(item['answer']) for item in history[-UNKNOWN_STREAK_LIMIT:])
     force_result = force_result or unknown_stop
+    if fast_templates and not strict_review and not force_result:
+        if __package__:
+            from .fast_questions import template_step
+        else:
+            from fast_questions import template_step
+        question, complete = template_step(consultation, history, skipped or [])
+        if question:
+            if trace is not None:
+                trace.append({'question_source': 'template', 'model_calls': 0})
+            return RESPONSE_ADAPTER.validate_python(question).model_dump()
+        force_result = complete
     if not strict_review:
         return practical_decide(client, model, consultation, history, force_result, skipped,
                                 deadline, trace, unknown_stop)

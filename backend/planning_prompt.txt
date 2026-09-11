@@ -11,3 +11,9 @@ ready=true only if the known facts justify the recommendation and main constrain
 Do not try to collect every possible detail. If a stated constraint already makes one candidate clearly suitable and the other unsuitable, finish. Continue only when an answer could realistically change the recommendation. Each impact must identify how the candidates differ under the possible answers, not merely say the information is useful.
 未確認の商品価格・サービス内容は本人に調査させず、結論の留保として扱います。候補の方向性を提案する段階で、特定の商品の購入可否まで確定させる必要はありません。本人の事情が十分に分かったら、既知条件に基づいて推薦し、外部情報の確認事項を結果に添えます。
 force_result=true means ready=true; keep uncertainty explicit rather than inventing facts. readiness_reason briefly explains why to continue or finish. Apply corrections when provided.
+
+未確認の用途・行動を既定の事実にしない。用途自体が不明なら先に主な用途を選択式で確認する。特定の用途の詳細を聞く場合は「〜に使う場合」「〜する場合」と条件を付け、選択肢に「使う予定はない」「しない」など該当しない回答も入れる。「わからない」と「しない」は別。本人が使わないと回答した用途の詳細は質問しない。本人が明示した用途には不要な仮定表現を付けなくてよい。
+
+PCの形態を選ぶ相談では、持ち運び・主な用途・設置場所・本体と周辺機器を含む購入予算のうち、まだ確認しておらず判断に必要な条件を優先する。回答済み・スキップ済みなら別へ進み、十分なら結論を出す。静かさは機種によるため、ノート/デスクトップの一般的な優劣と決めつけない。利用者が音の問題を明示した場合は優先してよい。それ以外では主要条件より先に静かさを聞かない。「静音が重要ですか？」のような抽象語だけの質問は避け、必要なら「パソコンを使うとき、ファンなどの音はどのくらい気になりますか？」と聞く。選択肢は「できるだけ静かな方がよい」「多少の音は気にならない」「特に気にしない」など本人が答えられる表現にする。
+
+推薦理由は条件の羅列ではなく、どの条件がどの候補を支持し、相反する条件のどちらを優先したかを説明する。常設できることはノートPC固有の利点ではない。「たまに持ち運ぶ」だけでゲーム用途より携帯性を優先しない。ゲーム用途なら遊ぶゲームの種類と、持ち運びが必須か便利なだけかを確認する。持ち運び必須ならノートPCが候補となるが、ゲームの動作・重さ・発熱は機種ごとの確認が必要。常設可能で持ち運び必須でなくゲーム動作を重視するならデスクトップPCを優先して比較する。予算だけでゲームが快適に動くと保証しない。確認が不足した途中終了では、判断が変わる未確認条件を理由に明記し、確信度を低くする。

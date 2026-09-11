@@ -217,7 +217,7 @@
                 </section>
                 <form class="card" @submit.prevent="startConsultation">
                     <label for="consultation">何について迷っていますか？</label>
-                    <textarea id="consultation" ref="consultationInput" v-model="consultation" :disabled="loading" rows="4" placeholder="例：大学用のPCをノートPCにするか、デスクトップPCにするか迷っています。"></textarea>
+                    <textarea id="consultation" ref="consultationInput" v-model="consultation" :disabled="loading" rows="4" placeholder="例：ノートPCにするかデスクトップPCにするか迷っています。"></textarea>
                     <div class="examples" role="group" aria-label="相談例を入力">
                         <button v-for="example in examples" :key="example.label" type="button" class="example" :disabled="loading" @click="consultation = example.text">{{ example.label }}</button>
                     </div>
@@ -285,7 +285,7 @@
                     answerInput: '', selectedOption: '', showOther: false, loading: false, error: '', pending: null, historyOpen: false, confidence: 0,
                     savedSessions: [], selectedSession: null, skippedQuestions: [],
 examples: [
-                        { label: 'PC選び', text: '大学用のPCをノートPCにするかデスクトップPCにするか迷っています。' },
+                        { label: 'PC選び', text: 'ノートPCにするかデスクトップPCにするか迷っています。' },
                         { label: '車の利用', text: '車を買うかカーシェアを利用するか迷っています。' },
                         { label: 'ジム', text: 'ダイエットのためにジムに通うか、自宅で筋トレを始めるか迷っています。' }
                     ]
@@ -349,7 +349,14 @@ examples: [
                 submitAnswer(answer) {
                     if (this.loading || !this.question) return;
                     // Commit history only after success so retries never duplicate answers.
-                    this.pending = { consultation: this.consultation, history: [...this.history, { question: this.question.question, answer }], answer };
+                    const item = { question: this.question.question, answer };
+                    if (this.question.condition) item.condition = this.question.condition;
+                    this.pending = { consultation: this.consultation, history: [...this.history, item], answer };
+                    return this.sendRequest();
+                },
+                skipQuestion() {
+                    if (this.loading || !this.question) return;
+                    this.pending = { consultation: this.consultation, history: [...this.history], answer: null, skipQuestion: this.question.question };
                     return this.sendRequest();
                 },
                 finishEarly() {

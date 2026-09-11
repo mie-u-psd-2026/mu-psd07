@@ -5,7 +5,7 @@ from typing import Any
 
 from openai import OpenAI
 
-DEFAULT_MODEL = 'qwen3:8b'
+DEFAULT_MODEL = 'qwen3:4b-instruct-2507-q4_K_M'
 DEFAULT_CONTEXT_LENGTH = 8192
 
 class OllamaClient:

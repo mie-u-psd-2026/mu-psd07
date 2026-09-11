@@ -89,7 +89,7 @@ class DecisionTests(unittest.TestCase):
 
     def run_decision(self, **kwargs):
         return decide(self.client, 'test-model', self.consultation, kwargs.pop('history', []),
-                      strict_review=kwargs.pop('strict_review', True), **kwargs)
+                      strict_review=kwargs.pop('strict_review', True), fast_templates=False, **kwargs)
 
     def test_example_reference_returns_public_choices_without_generation(self):
         self.consultation = '犬か猫を飼いたい'
@@ -104,6 +104,17 @@ class DecisionTests(unittest.TestCase):
         self.assertNotIn('example_id', response)
         self.assertEqual(self.client.chat.completions.create.call_count, 1)
 
+    def test_light_model_hands_natural_result_to_result_model(self):
+        self.outputs(turn(result()), turn(result()))
+        with patch.dict('os.environ', {'OLLAMA_RESULT_MODEL': 'qwen3:8b'}):
+            response = decide(self.client, 'qwen3:4b-instruct-2507-q4_K_M',
+                              self.consultation, [])
+        self.assertEqual(response['status'], 'result')
+        calls = self.client.chat.completions.create.call_args_list
+        self.assertEqual([c.kwargs['model'] for c in calls],
+                         ['qwen3:4b-instruct-2507-q4_K_M', 'qwen3:8b'])
+        self.assertLess(calls[1].kwargs['timeout'], calls[0].kwargs['timeout'])
+
     def test_reference_cannot_select_skipped_or_answered_example(self):
         self.consultation = '犬か猫を飼いたい'
         value = {'plan': {'candidates': ['犬', '猫'], 'purpose': '世話の時間を確認する',
@@ -115,7 +126,7 @@ class DecisionTests(unittest.TestCase):
             skipped=['今の住まいでは、犬や猫を飼えますか？'])
         self.assertEqual(response['condition'], '世話に使える時間')
 
-    def test_reference_condition_mismatch_is_retried(self):
+    def test_reference_condition_mismatch_is_repaired_without_retry(self):
         self.consultation = '犬か猫を飼いたい'
         value = {'plan': {'candidates': ['犬', '猫'], 'purpose': '留守時間を確認する',
                          'ready': False, 'next_condition': '留守の時間'},
@@ -123,8 +134,71 @@ class DecisionTests(unittest.TestCase):
         corrected = {**value, 'response': {**value['response'], 'example_id': 1}}
         self.outputs(value, corrected)
         response = self.run_decision(strict_review=False)
-        self.assertEqual(response['condition'], '留守の時間')
-        self.assertEqual(self.client.chat.completions.create.call_count, 2)
+        self.assertEqual(response['condition'], '住居の飼育制約')
+        self.assertEqual(self.client.chat.completions.create.call_count, 1)
+
+    def test_pc_carry_answers_recover_from_two_invalid_model_outputs(self):
+        self.consultation = 'ノートPCにするかデスクトップPCにするか迷っています。'
+        for answer in ['ほぼ毎日', '週に数回', 'たまに', 'ほとんど持ち運ばない', 'わからない・決められない']:
+            with self.subTest(answer=answer):
+                self.outputs('invalid', 'invalid')
+                response = self.run_decision(strict_review=False, history=[{
+                    'question': 'パソコンをどのくらい持ち運びますか？',
+                    'answer': answer, 'condition': '持ち運び'}])
+                self.assertEqual(response['condition'], '主な用途')
+                self.assertEqual(response['answer_type'], 'choice')
+                self.assertNotIn('プログラミング', response['question'])
+
+    def test_pc_recovery_respects_known_usage_and_skips(self):
+        from backend.decision import pc_recovery_question
+        consultation = 'ノートPCかデスクトップPCで迷う'
+        history = [{'question': '持ち運びますか？', 'answer': 'いいえ', 'condition': '持ち運び'}]
+        self.assertIsNone(pc_recovery_question(consultation + '。ゲームに使う', history, []))
+        self.assertIsNone(pc_recovery_question(consultation, history,
+            ['パソコンでは、主にどんなことをしたいですか？']))
+        self.assertIsNone(pc_recovery_question('犬か猫で迷う', [], []))
+
+    def test_pc_recovery_finishes_after_usage_even_when_every_generation_fails(self):
+        self.consultation = 'ノートPCにするかデスクトップPCにするか迷っています。'
+        for usage in ['ネット閲覧や動画視聴', '文書作成や学習', 'ゲーム', '制作や開発',
+                      'その他・まだ決めていない', 'わからない・決められない']:
+            with self.subTest(usage=usage):
+                history = [dict(question='持ち運びますか？', answer='ほとんど持ち運ばない', condition='持ち運び'),
+                           dict(question='主な用途は？', answer=usage, condition='主な用途')]
+                for _ in range(3):
+                    self.outputs('invalid', 'invalid')
+                    response = self.run_decision(strict_review=False, history=history)
+                    if response['status'] == 'result':
+                        break
+                    self.assertNotIn(response['condition'], [h['condition'] for h in history])
+                    history.append(dict(question=response['question'], condition=response['condition'],
+                                        answer=response['options'][0]))
+                self.assertEqual(response['status'], 'result')
+
+    def test_pc_recovery_skip_and_force_result_do_not_add_questions(self):
+        from backend.pc_recovery import recover, QUESTIONS
+        consultation = 'ノートPCにするかデスクトップPCにするか迷っています。'
+        history = [dict(question='持ち運びますか？', answer='ほぼ毎日', condition='持ち運び'),
+                   dict(question='用途は？', answer='ゲーム', condition='主な用途')]
+        self.assertEqual(recover(consultation, history, [q[1] for q in QUESTIONS])['status'], 'result')
+        self.assertEqual(recover(consultation, history, [], True)['recommendation'], 'ノートPC')
+        self.assertIsNone(recover(consultation + '予算は5万円です。', history, [], True))
+
+    def test_repairable_options_do_not_need_a_second_call(self):
+        value = draft()
+        value['response']['options'] = ['動かない', '動かない', '異音がする']
+        self.outputs(turn(value))
+        response = self.run_decision(strict_review=False)
+        self.assertEqual(response['options'], ['動かない', '異音がする'])
+        self.assertEqual(self.client.chat.completions.create.call_count, 1)
+
+    def test_failed_light_generation_uses_result_model_without_duplicate_handoff(self):
+        self.outputs('invalid', turn(result()))
+        with patch.dict('os.environ', {'OLLAMA_RESULT_MODEL': 'qwen3:8b'}):
+            response = decide(self.client, 'qwen3:4b-instruct-2507-q4_K_M', self.consultation, [])
+        self.assertEqual(response['status'], 'result')
+        calls = self.client.chat.completions.create.call_args_list
+        self.assertEqual([c.kwargs['model'] for c in calls], ['qwen3:4b-instruct-2507-q4_K_M', 'qwen3:8b'])
 
     def test_planning_generation_review_are_separate_and_internal(self):
         self.outputs(plan(), draft(), review())
@@ -181,6 +255,57 @@ class DecisionTests(unittest.TestCase):
         omitted = examples[0]['question']
         self.assertNotIn(omitted, [e['question'] for e in question_examples('大学のPC選び', '持ち運び', [omitted])])
         self.assertEqual(question_examples('サークルの連絡方法', '参加者への連絡', []), [])
+
+    def test_pc_examples_do_not_assume_programming_use(self):
+        from backend.decision import question_examples
+        examples = question_examples('ノートPCにするかデスクトップPCにするか迷っています',
+                                     '', [], ['持ち運び'])
+        self.assertIn('主な用途', [e['condition'] for e in examples])
+        self.assertNotIn('作りたいもの', [e['condition'] for e in examples])
+        coding = question_examples('プログラミングに使うPC', '', [], ['持ち運び', '主な用途', '設置場所', '購入予算'])
+        self.assertIn('場合', coding[0]['question'])
+        self.assertIn('使う予定はない', coding[0]['options'])
+
+    def test_pc_examples_prioritize_space_and_total_budget_after_usage(self):
+        from backend.decision import question_examples
+        examples = question_examples('ノートPCかデスクトップPCで迷う', '', [], ['持ち運び', '主な用途'])
+        self.assertEqual([e['condition'] for e in examples], ['設置場所', '購入予算'])
+        examples = question_examples('ノートPCかデスクトップPCで迷う', '',
+            [examples[0]['question']], ['持ち運び', '主な用途'])
+        self.assertEqual(examples[0]['condition'], '購入予算')
+
+    def test_pc_quiet_jargon_is_rewritten_even_after_five_answers(self):
+        self.consultation = 'ノートPCにするかデスクトップPCにするか迷っています。'
+        value = draft()
+        value['response'].update(question='静音が重要ですか？', condition='静音', options=['はい', 'いいえ'])
+        self.outputs(turn(value, ['ノートPC', 'デスクトップPC']))
+        history = [dict(question=f'{label}について教えてください', condition=label, answer='確認済み')
+                   for label in ['持ち運び', '主な用途', '設置場所', '購入予算', '重視する点']]
+        response = self.run_decision(strict_review=False, history=history)
+        self.assertEqual(response['question'], 'パソコンを使うとき、ファンなどの音はどのくらい気になりますか？')
+        self.assertIn('多少の音は気にならない', response['options'])
+        self.assertEqual(self.client.chat.completions.create.call_count, 1)
+
+    def test_pc_templates_need_no_model_calls_until_result(self):
+        consultation = 'ノートPCにするかデスクトップPCにするか迷っています。'
+        history = []
+        for condition in ['持ち運び', '主な用途', '設置場所', '購入予算']:
+            response = decide(self.client, 'test-model', consultation, history)
+            self.assertEqual(response['condition'], condition)
+            history.append(dict(question=response['question'], condition=condition, answer=response['options'][0]))
+        self.client.chat.completions.create.assert_not_called()
+        self.outputs(turn({**result(), 'recommendation': 'ノートPC'}, ['ノートPC', 'デスクトップPC']))
+        self.assertEqual(decide(self.client, 'test-model', consultation, history)['status'], 'result')
+        call = self.client.chat.completions.create.call_args
+        self.assertTrue(json.loads(call.kwargs['messages'][1]['content'])['force_result'])
+
+    def test_pc_template_skip_and_additional_constraints(self):
+        from backend.pc_recovery import template_step
+        consultation = 'ノートPCにするかデスクトップPCにするか迷っています。'
+        question, _ = template_step(consultation, [], [])
+        next_question, _ = template_step(consultation, [], [question['question']])
+        self.assertEqual(next_question['condition'], '主な用途')
+        self.assertEqual(template_step(consultation + 'ゲームに使います。', [], []), (None, False))
 
     def test_pet_knowledge_question_is_repaired_instead_of_displayed(self):
         bad = draft()
